@@ -75,6 +75,8 @@ class LiteraryResult(BaseModel):
 class DspResult(BaseModel):
     bpm: float | None = None
     bpm_confidence: float | None = Field(default=None, ge=0, le=1)
+    bpm_candidates: list[float] = Field(default_factory=list)
+    bpm_ambiguous: bool = False
     key: str | None = None
     key_confidence: float | None = Field(default=None, ge=0, le=1)
     energy_curve: list[Evidence] = Field(default_factory=list)

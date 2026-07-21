@@ -36,6 +36,8 @@ export interface LyricsSegment {
 export interface DspResult {
   bpm: number | null;
   bpm_confidence: number | null;
+  bpm_candidates: number[];
+  bpm_ambiguous: boolean;
   key: string | null;
   key_confidence: number | null;
   energy_curve: Evidence[];

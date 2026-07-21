@@ -44,6 +44,9 @@ class BasicDspAdapter(DspAdapter):
 
         bpm: float | None = None
         bpm_confidence: float | None = None
+        bpm_candidates: list[float] = []
+        bpm_ambiguous = False
+        octave_support_ratio: float | None = None
         if peak_rms > 1e-7 and duration >= 2.0:
             onset_envelope = librosa.onset.onset_strength(y=audio, sr=sample_rate)
             tempo = librosa.feature.tempo(
@@ -53,6 +56,14 @@ class BasicDspAdapter(DspAdapter):
             )
             tempo_value = float(np.asarray(tempo).reshape(-1)[0])
             if np.isfinite(tempo_value) and tempo_value > 0:
+                (
+                    tempo_value,
+                    bpm_candidates,
+                    bpm_ambiguous,
+                    octave_support_ratio,
+                ) = self._resolve_tempo_octave(
+                    tempo_value, onset_envelope, sample_rate
+                )
                 bpm = round(tempo_value, 1)
                 bpm_confidence = self._tempo_confidence(onset_envelope, sample_rate)
 
@@ -87,6 +98,9 @@ class BasicDspAdapter(DspAdapter):
                     "duration_s": duration,
                     "sample_rate": sample_rate,
                     "bpm_confidence": bpm_confidence,
+                    "bpm_candidates": bpm_candidates,
+                    "bpm_ambiguous": bpm_ambiguous,
+                    "octave_support_ratio": octave_support_ratio,
                     "key_confidence": key_confidence,
                 },
             )
@@ -94,11 +108,74 @@ class BasicDspAdapter(DspAdapter):
         return DspResult(
             bpm=bpm,
             bpm_confidence=bpm_confidence,
+            bpm_candidates=bpm_candidates,
+            bpm_ambiguous=bpm_ambiguous,
             key=key,
             key_confidence=key_confidence,
             energy_curve=energy_curve,
             evidence=evidence,
         )
+
+    @classmethod
+    def _resolve_tempo_octave(
+        cls,
+        tempo: float,
+        onset_envelope: np.ndarray,
+        sample_rate: int,
+    ) -> tuple[float, list[float], bool, float | None]:
+        """Prefer the perceptual half-time pulse when octave candidates are tied.
+
+        Beat trackers frequently report the subdivision rate of a slow song.  We
+        only fold a fast estimate in half when the half-time pulse is in the
+        common tapping range and has nearly the same tempogram support.
+        """
+        rounded = round(float(tempo), 1)
+        if tempo < 135.0 or tempo > 220.0:
+            return tempo, [rounded], False, None
+
+        half_tempo = tempo / 2.0
+        if half_tempo < 55.0 or half_tempo > 110.0:
+            return tempo, [rounded], False, None
+
+        primary_support = cls._pulse_support(
+            onset_envelope, sample_rate, tempo
+        )
+        half_support = cls._pulse_support(
+            onset_envelope, sample_rate, half_tempo
+        )
+        if primary_support <= 1e-9:
+            return tempo, [rounded], False, None
+
+        support_ratio = half_support / primary_support
+        if support_ratio < 0.92:
+            return tempo, [rounded], False, round(support_ratio, 3)
+
+        return (
+            half_tempo,
+            [round(half_tempo, 1), rounded],
+            True,
+            round(support_ratio, 3),
+        )
+
+    @staticmethod
+    def _pulse_support(
+        onset_envelope: np.ndarray,
+        sample_rate: int,
+        tempo: float,
+    ) -> float:
+        if onset_envelope.size < 4:
+            return 0.0
+        tempogram = librosa.feature.tempogram(
+            onset_envelope=onset_envelope,
+            sr=sample_rate,
+        )
+        pulse = np.mean(tempogram, axis=1)
+        tempo_bins = librosa.tempo_frequencies(len(pulse), sr=sample_rate)
+        valid = np.flatnonzero(np.isfinite(tempo_bins) & (tempo_bins > 0))
+        if not valid.size:
+            return 0.0
+        distances = np.abs(np.log2(tempo_bins[valid] / tempo))
+        return float(pulse[valid[int(np.argmin(distances))]])
 
     @staticmethod
     def _tempo_confidence(onset_envelope: np.ndarray, sample_rate: int) -> float:

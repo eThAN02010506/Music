@@ -176,6 +176,8 @@ def main() -> None:
         metrics = result.get("technical_metrics") or {}
         bpm = metrics.get("bpm")
         bpm_confidence = metrics.get("bpm_confidence")
+        bpm_candidates = metrics.get("bpm_candidates") or []
+        bpm_ambiguous = bool(metrics.get("bpm_ambiguous"))
         key = metrics.get("key")
         key_confidence = metrics.get("key_confidence")
         bpm_display = (
@@ -191,6 +193,11 @@ def main() -> None:
         col1, col2 = st.columns(2)
         col1.metric("BPM", bpm_display)
         col2.metric("Key", key_display)
+        if bpm_ambiguous and len(bpm_candidates) > 1:
+            st.caption(
+                "BPM 存在倍频歧义；其他候选："
+                + " / ".join(str(item) for item in bpm_candidates[1:])
+            )
         st.markdown("#### DSP Evidence")
         render_evidence(metrics.get("evidence") or [])
 

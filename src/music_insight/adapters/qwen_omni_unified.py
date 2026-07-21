@@ -390,6 +390,8 @@ class QwenOmniUnifiedAdapter(UnifiedAudioAdapter):
             "dsp": {
                 "bpm": dsp.bpm,
                 "bpm_confidence": dsp.bpm_confidence,
+                "bpm_candidates": dsp.bpm_candidates,
+                "bpm_ambiguous": dsp.bpm_ambiguous,
                 "key": dsp.key,
                 "key_confidence": dsp.key_confidence,
             },

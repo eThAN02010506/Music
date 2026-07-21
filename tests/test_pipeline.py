@@ -1,5 +1,6 @@
 import asyncio
 import io
+from unittest.mock import patch
 import wave
 
 import numpy as np
@@ -227,6 +228,46 @@ def test_real_dsp_returns_metrics_and_energy(tmp_path):
     assert 0 <= result.key_confidence <= 1
     assert result.energy_curve
     assert result.evidence[0].confidence != 1.0
+
+
+def test_dsp_prefers_supported_half_time_candidate():
+    onset = np.ones(64, dtype=np.float32)
+
+    with patch.object(
+        BasicDspAdapter,
+        "_pulse_support",
+        side_effect=[0.7428, 0.7299],
+    ):
+        bpm, candidates, ambiguous, ratio = BasicDspAdapter._resolve_tempo_octave(
+            151.999,
+            onset,
+            22_050,
+        )
+
+    assert bpm == pytest.approx(75.9995)
+    assert candidates == [76.0, 152.0]
+    assert ambiguous is True
+    assert ratio == pytest.approx(0.983)
+
+
+def test_dsp_keeps_fast_tempo_without_half_time_support():
+    onset = np.ones(64, dtype=np.float32)
+
+    with patch.object(
+        BasicDspAdapter,
+        "_pulse_support",
+        side_effect=[0.8, 0.5],
+    ):
+        bpm, candidates, ambiguous, ratio = BasicDspAdapter._resolve_tempo_octave(
+            160.0,
+            onset,
+            22_050,
+        )
+
+    assert bpm == 160.0
+    assert candidates == [160.0]
+    assert ambiguous is False
+    assert ratio == pytest.approx(0.625)
 
 
 def test_preprocessor_creates_omni_wav(tmp_path):

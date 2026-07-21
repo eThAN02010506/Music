@@ -204,7 +204,16 @@ function ResultPanel({
           <audio ref={audioRef} src={audioUrl} controls preload="metadata" />
         </div>
         <div className="metric-strip">
-          <div><span>BPM</span><strong>{result.technical_metrics.bpm?.toFixed(1) || "—"}</strong><small>可信度 {percent(result.technical_metrics.bpm_confidence)}</small></div>
+          <div>
+            <span>BPM</span>
+            <strong>{result.technical_metrics.bpm?.toFixed(1) || "—"}</strong>
+            <small>
+              可信度 {percent(result.technical_metrics.bpm_confidence)}
+              {result.technical_metrics.bpm_ambiguous && result.technical_metrics.bpm_candidates.length > 1
+                ? ` · 倍频候选 ${result.technical_metrics.bpm_candidates.slice(1).join(" / ")}`
+                : ""}
+            </small>
+          </div>
           <div><span>KEY</span><strong>{result.technical_metrics.key || "—"}</strong><small>可信度 {percent(result.technical_metrics.key_confidence)}</small></div>
           <div><span>LYRICS</span><strong>{result.lyrics.length}</strong><small>个片段</small></div>
         </div>

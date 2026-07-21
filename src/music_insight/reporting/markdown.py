@@ -52,6 +52,12 @@ def render_markdown_report(result: AnalysisResult) -> str:
             "## 技术指标",
             (
                 f"- BPM：{metrics.bpm}（可信度 {metrics.bpm_confidence:.0%}）"
+                + (
+                    "；倍频候选 "
+                    + " / ".join(str(item) for item in metrics.bpm_candidates[1:])
+                    if metrics.bpm_ambiguous and len(metrics.bpm_candidates) > 1
+                    else ""
+                )
                 if metrics.bpm is not None and metrics.bpm_confidence is not None
                 else f"- BPM：{metrics.bpm if metrics.bpm is not None else '待计算'}"
             ),
