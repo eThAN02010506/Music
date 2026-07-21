@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from enum import StrEnum
+import inspect
 from typing import Any
 from uuid import uuid4
 
@@ -34,7 +35,7 @@ class JobSnapshot(BaseModel):
 
 
 class _Job:
-    def __init__(self, job_id: str) -> None:
+    def __init__(self, job_id: str, observer: JobObserver | None = None) -> None:
         now = datetime.now(UTC)
         self.id = job_id
         self.state = JobState.QUEUED
@@ -47,6 +48,7 @@ class _Job:
         self.error: str | None = None
         self.revision = 0
         self.task: asyncio.Task[None] | None = None
+        self.observer = observer
 
     def snapshot(self) -> JobSnapshot:
         return JobSnapshot(
@@ -73,6 +75,9 @@ class _Job:
 
 ProgressUpdate = Callable[[str, float, str], Awaitable[None]]
 JobWork = Callable[[ProgressUpdate], Awaitable[AnalysisResult]]
+JobObserver = Callable[
+    [JobSnapshot, AnalysisResult | None], Awaitable[None] | None
+]
 
 
 class AnalysisJobStore:
@@ -81,8 +86,12 @@ class AnalysisJobStore:
     def __init__(self) -> None:
         self._jobs: dict[str, _Job] = {}
 
-    def create(self, work: JobWork) -> JobSnapshot:
-        job = _Job(uuid4().hex)
+    def create(
+        self,
+        work: JobWork,
+        observer: JobObserver | None = None,
+    ) -> JobSnapshot:
+        job = _Job(uuid4().hex, observer=observer)
         self._jobs[job.id] = job
         job.task = asyncio.create_task(self._run(job, work))
         return job.snapshot()
@@ -110,6 +119,7 @@ class AnalysisJobStore:
             job.progress = max(job.progress, min(float(progress), 0.99))
             job.message = message
             job.touch()
+            await self._notify_observer(job)
 
         try:
             await update("starting", 0.02, "正在启动分析")
@@ -119,17 +129,28 @@ class AnalysisJobStore:
             job.progress = 1.0
             job.message = "分析完成"
             job.touch()
+            await self._notify_observer(job)
         except asyncio.CancelledError:
             job.state = JobState.CANCELLED
             job.stage = "cancelled"
             job.message = "任务已取消"
             job.touch()
+            await self._notify_observer(job)
         except Exception as exc:
             job.state = JobState.FAILED
             job.stage = "failed"
             job.message = "分析失败"
             job.error = (str(exc).strip() or exc.__class__.__name__)[:1000]
             job.touch()
+            await self._notify_observer(job)
+
+    @staticmethod
+    async def _notify_observer(job: _Job) -> None:
+        if job.observer is None:
+            return
+        observed = job.observer(job.snapshot(), job.result)
+        if inspect.isawaitable(observed):
+            await observed
 
     def raw_revision(self, job_id: str) -> int | None:
         job = self._jobs.get(job_id)

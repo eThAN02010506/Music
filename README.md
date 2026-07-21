@@ -6,8 +6,8 @@
 - 本地 Qwen2.5-Omni-3B Q8 权重位于 `src/model/`，可作为离线后备
 
 正式界面使用 React + TypeScript + Vite，FastAPI 提供异步任务与 SSE
-进度流；Streamlit 仅保留为调试台。模型权重、上传缓存和本地测试音频
-不会提交到 Git。
+进度流；Streamlit 仅保留为调试台。正式界面支持多个持久化分析、重命名、
+删除和双结果对比。模型权重、上传缓存和本地测试音频不会提交到 Git。
 
 处理流水线：
 
@@ -46,6 +46,21 @@
 - BPM 估计会检查常见的半速/双速歧义。当高 BPM 与其半速候选具有近似
   tempogram 支持时，界面优先显示更接近人类拍点感知的半速值，并保留原始
   倍频候选供核查。
+- 默认模型仍为 `192.168.1.97:8004`。每次新分析可以在“模型设置”中改用
+  其他 OpenAI 兼容地址，或选择后端本机的 GGUF 权重；选择只影响该次任务。
+- 本地权重模式需要支持该 Qwen Omni GGUF 的 `llama-server`。后端会在
+  `MUSIC_INSIGHT_LOCAL_MODEL_ROOT` 内查找主 GGUF 和 `mmproj*.gguf`，并在
+  `127.0.0.1:8010` 启动服务。运行器缺失或路径无效时创建任务会明确报错，
+  不会悄悄回退到局域网模型。
+
+## 历史、缓存与对比
+
+- 新任务创建后立即出现在左侧历史列表；结果、状态、原始音频路径和模型来源
+  持久化到 `.music_insight/history.sqlite3`，重启 FastAPI 后仍可读取。
+- 历史项可以打开、重命名或删除。删除会移除 SQLite 记录及工作区内缓存的
+  原始上传音频；正在运行的任务必须先取消。
+- 勾选两个已完成项目后可并排比较 BPM、调性、歌词数量、乐器、主题、直接
+  情绪、推断氛围和摘要。
 
 ## 运行
 
@@ -92,17 +107,33 @@ GET  /jobs/{id}
 GET  /jobs/{id}/events
 GET  /jobs/{id}/result
 POST /jobs/{id}/cancel
+GET  /history
+GET  /history/{id}
+GET  /history/{id}/audio
+PATCH /history/{id}
+DELETE /history/{id}
 ```
 
 任务状态包括 `queued`、`running`、`completed`、`failed` 和 `cancelled`。
 前端通过 `/jobs/{id}/events` 接收 SSE 进度，完成后读取
 `/jobs/{id}/result`。
 
+`POST /jobs` 还接受以下可选表单字段：
+
+```text
+model_source=network | local
+model_endpoint=http://host:port       # network 模式；留空使用默认 8004
+local_model_path=/allowed/path        # local 模式；目录或主 GGUF 文件
+```
+
 ## 配置
 
 ```bash
 export MUSIC_INSIGHT_OMNI_ENDPOINT=http://192.168.1.97:8004
 export MUSIC_INSIGHT_OMNI_CHUNK_SECONDS=30
+export MUSIC_INSIGHT_LOCAL_MODEL_ROOT=src/model
+export MUSIC_INSIGHT_LOCAL_OMNI_ENDPOINT=http://127.0.0.1:8010
+export MUSIC_INSIGHT_LOCAL_LLAMA_SERVER=llama-server
 ```
 
 ## 验证

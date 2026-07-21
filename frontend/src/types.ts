@@ -62,4 +62,29 @@ export interface HealthResult {
   status: string;
   model_endpoint: string;
   mode: string;
+  local_model_root: string;
+  local_runner_available: boolean;
+}
+
+export interface HistorySummary {
+  id: string;
+  title: string;
+  file_name: string;
+  language: string | null;
+  state: string;
+  created_at: string;
+  updated_at: string;
+  error: string | null;
+  summary: string | null;
+  duration_s: number | null;
+  lyrics_count: number;
+  instruments: string[];
+  bpm: number | null;
+  model_source: "network" | "local";
+  model_location: string | null;
+}
+
+export interface HistoryDetail extends HistorySummary {
+  result: AnalysisResult | null;
+  audio_url: string | null;
 }

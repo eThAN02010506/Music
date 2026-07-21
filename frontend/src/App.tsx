@@ -3,6 +3,8 @@ import type {
   AnalysisResult,
   Evidence,
   HealthResult,
+  HistoryDetail,
+  HistorySummary,
   JobSnapshot,
   LyricsSegment,
 } from "./types";
@@ -53,16 +55,34 @@ function SignalMark() {
 function UploadPanel({
   file,
   language,
+  modelSource,
+  modelEndpoint,
+  localModelPath,
+  defaultEndpoint,
+  localModelRoot,
+  localRunnerAvailable,
   busy,
   onFile,
   onLanguage,
+  onModelSource,
+  onModelEndpoint,
+  onLocalModelPath,
   onAnalyze,
 }: {
   file: File | null;
   language: string;
+  modelSource: "network" | "local";
+  modelEndpoint: string;
+  localModelPath: string;
+  defaultEndpoint: string;
+  localModelRoot: string;
+  localRunnerAvailable: boolean;
   busy: boolean;
   onFile: (file: File) => void;
   onLanguage: (language: string) => void;
+  onModelSource: (source: "network" | "local") => void;
+  onModelEndpoint: (endpoint: string) => void;
+  onLocalModelPath: (path: string) => void;
   onAnalyze: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -114,6 +134,45 @@ function UploadPanel({
           </>
         )}
       </div>
+
+      <details className="model-settings">
+        <summary>
+          <span>模型设置</span>
+          <small>{modelSource === "network" ? (modelEndpoint || defaultEndpoint) : `本地 · ${localModelPath || localModelRoot}`}</small>
+        </summary>
+        <div className="model-settings-body">
+          <div className="model-source-tabs" role="group" aria-label="模型来源">
+            <button className={modelSource === "network" ? "active" : ""} onClick={() => onModelSource("network")} type="button">模型接口</button>
+            <button className={modelSource === "local" ? "active" : ""} onClick={() => onModelSource("local")} type="button">本地权重</button>
+          </div>
+          {modelSource === "network" ? (
+            <label className="model-field">
+              <span>OpenAI 兼容接口地址</span>
+              <input
+                value={modelEndpoint}
+                onChange={(event) => onModelEndpoint(event.target.value)}
+                placeholder={defaultEndpoint}
+                disabled={busy}
+              />
+              <small>留空使用默认 8004；也可填写本机 127.0.0.1 地址。</small>
+            </label>
+          ) : (
+            <label className="model-field">
+              <span>本地模型目录或主 GGUF 路径</span>
+              <input
+                value={localModelPath}
+                onChange={(event) => onLocalModelPath(event.target.value)}
+                placeholder={localModelRoot || "src/model"}
+                disabled={busy}
+              />
+              <small>
+                允许目录：{localModelRoot || "src/model"}。后端会自动配对 mmproj。
+                {!localRunnerAvailable && " 当前未检测到 llama-server，提交后会提示安装。"}
+              </small>
+            </label>
+          )}
+        </div>
+      </details>
 
       <div className="upload-actions">
         <label>
@@ -310,20 +369,150 @@ function ResultPanel({
   );
 }
 
+const historyStateLabels: Record<string, string> = {
+  queued: "排队中",
+  running: "分析中",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
+
+function historyTime(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function HistorySidebar({
+  items,
+  activeId,
+  compareIds,
+  onNew,
+  onSelect,
+  onDelete,
+  onRename,
+  onToggleCompare,
+  onCompare,
+}: {
+  items: HistorySummary[];
+  activeId: string | null;
+  compareIds: string[];
+  onNew: () => void;
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
+  onRename: (item: HistorySummary) => void;
+  onToggleCompare: (id: string) => void;
+  onCompare: () => void;
+}) {
+  return (
+    <aside className="history-sidebar">
+      <div className="history-brand"><SignalMark /><span>Music Insight</span></div>
+      <button className="new-analysis" onClick={onNew}><span>＋</span> 新分析</button>
+      <div className="history-heading">
+        <span>分析历史</span><small>{items.length}</small>
+      </div>
+      <div className="history-list">
+        {items.length ? items.map((item) => (
+          <article key={item.id} className={`history-item ${activeId === item.id ? "active" : ""}`}>
+            <button className="history-open" onClick={() => onSelect(item.id)}>
+              <strong>{item.title}</strong>
+              <span>{historyTime(item.created_at)} · {historyStateLabels[item.state] || item.state}</span>
+              {item.state === "completed" && (
+                <small>{item.lyrics_count} 段歌词{item.bpm ? ` · ${item.bpm.toFixed(1)} BPM` : ""}</small>
+              )}
+              <small>{item.model_source === "local" ? "本地权重" : item.model_location || "默认 8004"}</small>
+            </button>
+            <div className="history-actions">
+              <label title="加入对比">
+                <input
+                  type="checkbox"
+                  checked={compareIds.includes(item.id)}
+                  disabled={item.state !== "completed" || (!compareIds.includes(item.id) && compareIds.length >= 2)}
+                  onChange={() => onToggleCompare(item.id)}
+                />
+                对比
+              </label>
+              <button onClick={() => onRename(item)} aria-label={`重命名 ${item.title}`}>✎</button>
+              <button onClick={() => onDelete(item.id)} aria-label={`删除 ${item.title}`}>×</button>
+            </div>
+          </article>
+        )) : <p className="history-empty">分析完成后会保存在这里</p>}
+      </div>
+      <button className="compare-button" disabled={compareIds.length !== 2} onClick={onCompare}>
+        对比分析 {compareIds.length}/2
+      </button>
+      <p className="local-note">历史与音频仅保存在本机</p>
+    </aside>
+  );
+}
+
+function ComparisonPanel({ entries }: { entries: HistoryDetail[] }) {
+  const rows: Array<[string, (entry: HistoryDetail) => string]> = [
+    ["时长", (entry) => seconds(entry.duration_s)],
+    ["BPM", (entry) => entry.result?.technical_metrics.bpm?.toFixed(1) || "—"],
+    ["调性", (entry) => entry.result?.technical_metrics.key || "—"],
+    ["歌词", (entry) => `${entry.lyrics_count} 个片段`],
+    ["乐器", (entry) => entry.instruments.join("、") || "未确认"],
+    ["主题", (entry) => entry.result?.themes.join("、") || "未确认"],
+    ["直接情绪", (entry) => Array.from(new Set(entry.result?.emotion_timeline.map((item) => item.text) || [])).join("、") || "未确认"],
+    ["推断氛围", (entry) => entry.result?.inferred_atmosphere.map((item) => item.text).join("、") || "未确认"],
+  ];
+  return (
+    <section className="comparison panel">
+      <div className="section-kicker">COMPARE ANALYSES</div>
+      <h2>并排比较</h2>
+      <div className="comparison-grid comparison-head">
+        <span>指标</span>
+        {entries.map((entry) => <strong key={entry.id}>{entry.title}</strong>)}
+      </div>
+      {rows.map(([label, read]) => (
+        <div className="comparison-grid" key={label}>
+          <span>{label}</span>
+          {entries.map((entry) => <p key={entry.id}>{read(entry)}</p>)}
+        </div>
+      ))}
+      <div className="comparison-summaries">
+        {entries.map((entry) => (
+          <article key={entry.id}><strong>{entry.title}</strong><p>{entry.summary || "暂无摘要"}</p></article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default function App() {
   const [health, setHealth] = useState<HealthResult | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [audioUrl, setAudioUrl] = useState("");
+  const [fileName, setFileName] = useState("");
   const [language, setLanguage] = useState("auto");
+  const [modelSource, setModelSource] = useState<"network" | "local">("network");
+  const [modelEndpoint, setModelEndpoint] = useState("");
+  const [localModelPath, setLocalModelPath] = useState("");
   const [job, setJob] = useState<JobSnapshot | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState("");
+  const [history, setHistory] = useState<HistorySummary[]>([]);
+  const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
+  const [compareIds, setCompareIds] = useState<string[]>([]);
+  const [comparison, setComparison] = useState<HistoryDetail[]>([]);
+
+  const refreshHistory = () => {
+    fetch(`${API_BASE}/history`)
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then(setHistory)
+      .catch(() => setHistory([]));
+  };
 
   useEffect(() => {
     fetch(`${API_BASE}/health`)
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then(setHealth)
       .catch(() => setHealth(null));
+    refreshHistory();
   }, []);
 
   useEffect(() => {
@@ -333,6 +522,7 @@ export default function App() {
     events.addEventListener("progress", async (event) => {
       const snapshot = JSON.parse((event as MessageEvent).data) as JobSnapshot;
       setJob(snapshot);
+      refreshHistory();
       if (snapshot.state === "completed") {
         terminal = true;
         events.close();
@@ -340,6 +530,8 @@ export default function App() {
           const response = await fetch(`${API_BASE}/jobs/${snapshot.id}/result`);
           if (!response.ok) throw new Error("无法读取分析结果");
           setResult(await response.json());
+          setActiveHistoryId(snapshot.id);
+          refreshHistory();
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : "无法读取分析结果");
         }
@@ -358,15 +550,18 @@ export default function App() {
   }, [job?.id]);
 
   useEffect(() => () => {
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    if (audioUrl.startsWith("blob:")) URL.revokeObjectURL(audioUrl);
   }, [audioUrl]);
 
   const chooseFile = (next: File) => {
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    if (audioUrl.startsWith("blob:")) URL.revokeObjectURL(audioUrl);
     setFile(next);
+    setFileName(next.name);
     setAudioUrl(URL.createObjectURL(next));
     setResult(null);
     setJob(null);
+    setActiveHistoryId(null);
+    setComparison([]);
     setError("");
   };
 
@@ -377,13 +572,23 @@ export default function App() {
     const form = new FormData();
     form.append("file", file);
     if (language !== "auto") form.append("language", language);
+    form.append("model_source", modelSource);
+    if (modelSource === "network" && modelEndpoint.trim()) {
+      form.append("model_endpoint", modelEndpoint.trim());
+    }
+    if (modelSource === "local") {
+      form.append("local_model_path", localModelPath.trim() || health?.local_model_root || "src/model");
+    }
     try {
       const response = await fetch(`${API_BASE}/jobs`, { method: "POST", body: form });
       if (!response.ok) {
         const detail = await response.text();
         throw new Error(`后端返回 HTTP ${response.status}: ${detail}`);
       }
-      setJob(await response.json());
+      const snapshot = await response.json() as JobSnapshot;
+      setJob(snapshot);
+      setActiveHistoryId(snapshot.id);
+      refreshHistory();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "无法创建分析任务");
     }
@@ -395,33 +600,136 @@ export default function App() {
     if (response.ok) setJob(await response.json());
   };
 
+  const newAnalysis = () => {
+    if (audioUrl.startsWith("blob:")) URL.revokeObjectURL(audioUrl);
+    setFile(null);
+    setFileName("");
+    setAudioUrl("");
+    setJob(null);
+    setResult(null);
+    setError("");
+    setActiveHistoryId(null);
+    setComparison([]);
+  };
+
+  const selectHistory = async (id: string) => {
+    setError("");
+    setComparison([]);
+    try {
+      const response = await fetch(`${API_BASE}/history/${id}`);
+      if (!response.ok) throw new Error("无法读取历史分析");
+      const entry = await response.json() as HistoryDetail;
+      setActiveHistoryId(id);
+      setFile(null);
+      setFileName(entry.file_name);
+      setResult(entry.result);
+      setAudioUrl(entry.audio_url ? `${API_BASE}${entry.audio_url}` : "");
+      if (entry.state === "running" || entry.state === "queued") {
+        const jobResponse = await fetch(`${API_BASE}/jobs/${id}`);
+        if (jobResponse.ok) setJob(await jobResponse.json());
+      } else {
+        setJob(null);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法读取历史分析");
+    }
+  };
+
+  const deleteHistory = async (id: string) => {
+    try {
+      const response = await fetch(`${API_BASE}/history/${id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error(response.status === 409 ? "请先取消正在运行的任务" : "删除失败");
+      if (activeHistoryId === id) newAnalysis();
+      setCompareIds((items) => items.filter((item) => item !== id));
+      refreshHistory();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "删除失败");
+    }
+  };
+
+  const renameHistory = async (item: HistorySummary) => {
+    const title = window.prompt("重命名分析", item.title)?.trim();
+    if (!title || title === item.title) return;
+    const response = await fetch(`${API_BASE}/history/${item.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    if (response.ok) refreshHistory();
+    else setError("重命名失败");
+  };
+
+  const toggleCompare = (id: string) => {
+    setCompareIds((items) => items.includes(id) ? items.filter((item) => item !== id) : [...items, id].slice(0, 2));
+  };
+
+  const compareHistory = async () => {
+    if (compareIds.length !== 2) return;
+    try {
+      const responses = await Promise.all(compareIds.map((id) => fetch(`${API_BASE}/history/${id}`)));
+      if (responses.some((response) => !response.ok)) throw new Error("无法读取对比结果");
+      setComparison(await Promise.all(responses.map((response) => response.json())));
+      setActiveHistoryId(null);
+      setJob(null);
+      setResult(null);
+      setError("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法读取对比结果");
+    }
+  };
+
   const busy = job?.state === "queued" || job?.state === "running";
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <a className="brand" href="#top"><SignalMark /><span>Music Insight</span></a>
-        <div className="service-status">
-          <span className={health ? "online" : "offline"} />
-          <div><strong>{health ? "分析服务在线" : "后端未连接"}</strong><small>{health?.model_endpoint || API_BASE}</small></div>
-        </div>
-      </header>
+      <HistorySidebar
+        items={history}
+        activeId={activeHistoryId}
+        compareIds={compareIds}
+        onNew={newAnalysis}
+        onSelect={selectHistory}
+        onDelete={deleteHistory}
+        onRename={renameHistory}
+        onToggleCompare={toggleCompare}
+        onCompare={compareHistory}
+      />
+      <div className="app-main">
+        <header className="topbar">
+          <a className="brand" href="#top"><SignalMark /><span>Music Insight</span></a>
+          <div className="service-status">
+            <span className={health ? "online" : "offline"} />
+            <div><strong>{health ? "分析服务在线" : "后端未连接"}</strong><small>{health?.model_endpoint || API_BASE}</small></div>
+          </div>
+        </header>
 
-      <main id="top">
-        <UploadPanel
-          file={file}
-          language={language}
-          busy={Boolean(busy)}
-          onFile={chooseFile}
-          onLanguage={setLanguage}
-          onAnalyze={analyze}
-        />
-        {error && <div className="error-banner"><strong>出现问题</strong><span>{error}</span></div>}
-        {job && <ProgressPanel job={job} onCancel={cancel} />}
-        {result && file && <ResultPanel result={result} audioUrl={audioUrl} fileName={file.name} />}
-      </main>
+        <main id="top">
+          {!activeHistoryId && comparison.length === 0 && (
+            <UploadPanel
+              file={file}
+              language={language}
+              modelSource={modelSource}
+              modelEndpoint={modelEndpoint}
+              localModelPath={localModelPath}
+              defaultEndpoint={health?.model_endpoint || "http://192.168.1.97:8004"}
+              localModelRoot={health?.local_model_root || "src/model"}
+              localRunnerAvailable={health?.local_runner_available ?? false}
+              busy={Boolean(busy)}
+              onFile={chooseFile}
+              onLanguage={setLanguage}
+              onModelSource={setModelSource}
+              onModelEndpoint={setModelEndpoint}
+              onLocalModelPath={setLocalModelPath}
+              onAnalyze={analyze}
+            />
+          )}
+          {comparison.length === 2 && <ComparisonPanel entries={comparison} />}
+          {error && <div className="error-banner"><strong>出现问题</strong><span>{error}</span></div>}
+          {job && <ProgressPanel job={job} onCancel={cancel} />}
+          {result && fileName && <ResultPanel result={result} audioUrl={audioUrl} fileName={fileName} />}
+        </main>
 
-      <footer><span>Music Insight · 本地优先的音乐证据分析</span><span>FastAPI + React</span></footer>
+        <footer><span>Music Insight · 本地优先的音乐证据分析</span><span>FastAPI + React</span></footer>
+      </div>
     </div>
   );
 }

@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     omni_model: str | None = None
     omni_chunk_seconds: float = 30.0
 
+    local_model_root: Path = Field(default=Path("src/model"))
+    local_omni_endpoint: str = "http://127.0.0.1:8010"
+    local_llama_server: str = "llama-server"
+
 
 @lru_cache
 def get_settings() -> Settings:

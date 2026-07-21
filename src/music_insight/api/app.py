@@ -1,12 +1,26 @@
 import asyncio
+from functools import lru_cache
 import json
+from pathlib import Path
+import shutil
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from music_insight.adapters.dsp import BasicDspAdapter
+from music_insight.adapters.local_omni import (
+    LocalModelConfigurationError,
+    LocalOmniServer,
+    ManagedLocalOmniAdapter,
+)
 from music_insight.adapters.qwen_omni_unified import QwenOmniUnifiedAdapter
+from music_insight.api.history import (
+    HistoryDetail,
+    HistoryRename,
+    HistoryStore,
+    HistorySummary,
+)
 from music_insight.api.jobs import AnalysisJobStore, JobSnapshot, JobState, snapshot_event
 from music_insight.config import Settings, get_settings
 from music_insight.pipeline.orchestrator import AnalysisOrchestrator
@@ -31,15 +45,71 @@ app.add_middleware(
 jobs = AnalysisJobStore()
 
 
-def get_orchestrator(settings: Settings = Depends(get_settings)) -> AnalysisOrchestrator:
-    return AnalysisOrchestrator(
-        unified=QwenOmniUnifiedAdapter(
-            endpoint=settings.omni_endpoint,
+@lru_cache
+def _history_store(database_path: str) -> HistoryStore:
+    return HistoryStore(Path(database_path))
+
+
+def get_history_store(settings: Settings = Depends(get_settings)) -> HistoryStore:
+    return _history_store(str(settings.workspace_dir / "history.sqlite3"))
+
+
+@lru_cache
+def _local_server(root: str, endpoint: str, executable: str) -> LocalOmniServer:
+    return LocalOmniServer(root=Path(root), endpoint=endpoint, executable=executable)
+
+
+def get_orchestrator(
+    settings: Settings = Depends(get_settings),
+    *,
+    model_source: str = "network",
+    model_endpoint: str | None = None,
+    local_model_path: str | None = None,
+) -> AnalysisOrchestrator:
+    if model_source == "local":
+        if not local_model_path:
+            raise HTTPException(status_code=422, detail="Local model path is required.")
+        server = _local_server(
+            str(settings.local_model_root),
+            settings.local_omni_endpoint,
+            settings.local_llama_server,
+        )
+        try:
+            server.resolve(local_model_path)
+        except LocalModelConfigurationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if shutil.which(settings.local_llama_server) is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"未找到 {settings.local_llama_server}。请先安装支持该 Qwen Omni "
+                    "GGUF 的 llama.cpp，或填写本机 OpenAI 兼容接口地址。"
+                ),
+            )
+        unified = ManagedLocalOmniAdapter(
+            server=server,
+            model_path=local_model_path,
             completions_path=settings.omni_completions_path,
             models_path=settings.omni_models_path,
             model=settings.omni_model,
             chunk_seconds=settings.omni_chunk_seconds,
-        ),
+        )
+    else:
+        from urllib.parse import urlsplit
+
+        endpoint = (model_endpoint or settings.omni_endpoint).strip().rstrip("/")
+        parsed = urlsplit(endpoint)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise HTTPException(status_code=422, detail="Model endpoint must use http or https.")
+        unified = QwenOmniUnifiedAdapter(
+            endpoint=endpoint,
+            completions_path=settings.omni_completions_path,
+            models_path=settings.omni_models_path,
+            model=settings.omni_model,
+            chunk_seconds=settings.omni_chunk_seconds,
+        )
+    return AnalysisOrchestrator(
+        unified=unified,
         dsp=BasicDspAdapter(),
         preprocessor=Preprocessor(
             workspace_dir=settings.workspace_dir,
@@ -48,11 +118,13 @@ def get_orchestrator(settings: Settings = Depends(get_settings)) -> AnalysisOrch
 
 
 @app.get("/health")
-async def health(settings: Settings = Depends(get_settings)) -> dict[str, str]:
+async def health(settings: Settings = Depends(get_settings)) -> dict[str, str | bool]:
     return {
         "status": "ok",
         "model_endpoint": settings.omni_endpoint,
         "mode": "local-api",
+        "local_model_root": str(settings.local_model_root.resolve()),
+        "local_runner_available": shutil.which(settings.local_llama_server) is not None,
     }
 
 
@@ -66,6 +138,7 @@ async def root() -> dict[str, object]:
             "analyze": "POST /analyze",
             "markdown": "POST /analyze/markdown",
             "jobs": "POST /jobs",
+            "history": "GET /history",
             "docs": "/docs",
         },
         "pipeline": {
@@ -102,15 +175,107 @@ async def _save_asset(
 async def create_job(
     file: UploadFile = File(...),
     language: str | None = Form(default=None),
+    model_source: str = Form(default="network"),
+    model_endpoint: str | None = Form(default=None),
+    local_model_path: str | None = Form(default=None),
     settings: Settings = Depends(get_settings),
 ) -> JobSnapshot:
+    file_name = file.filename or "audio"
+    if model_source not in {"network", "local"}:
+        raise HTTPException(status_code=422, detail="Unsupported model source.")
+    orchestrator = get_orchestrator(
+        settings,
+        model_source=model_source,
+        model_endpoint=model_endpoint,
+        local_model_path=local_model_path,
+    )
     asset = await _save_asset(file, language, settings)
-    orchestrator = get_orchestrator(settings)
+    history = get_history_store(settings)
 
     async def work(update):
         return await orchestrator.analyze(asset, progress=update)
 
-    return jobs.create(work)
+    def observe(snapshot: JobSnapshot, result: AnalysisResult | None) -> None:
+        history.update(
+            snapshot.id,
+            state=snapshot.state.value,
+            updated_at=snapshot.updated_at,
+            result=result if snapshot.state == JobState.COMPLETED else None,
+            error=snapshot.error,
+        )
+
+    snapshot = jobs.create(work, observer=observe)
+    history.create(
+        job_id=snapshot.id,
+        title=Path(file_name).stem,
+        file_name=file_name,
+        language=language,
+        state=snapshot.state.value,
+        created_at=snapshot.created_at,
+        updated_at=snapshot.updated_at,
+        audio_path=asset.path,
+        model_source=model_source,
+        model_location=(
+            local_model_path if model_source == "local"
+            else (model_endpoint or settings.omni_endpoint)
+        ),
+    )
+    return snapshot
+
+
+@app.get("/history", response_model=list[HistorySummary])
+async def list_history(
+    limit: int = 100,
+    history: HistoryStore = Depends(get_history_store),
+) -> list[HistorySummary]:
+    return history.list(limit=limit)
+
+
+@app.get("/history/{history_id}", response_model=HistoryDetail)
+async def get_history(
+    history_id: str,
+    history: HistoryStore = Depends(get_history_store),
+) -> HistoryDetail:
+    entry = history.get(history_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Analysis history not found.")
+    return entry
+
+
+@app.patch("/history/{history_id}", response_model=HistoryDetail)
+async def rename_history(
+    history_id: str,
+    payload: HistoryRename,
+    history: HistoryStore = Depends(get_history_store),
+) -> HistoryDetail:
+    entry = history.rename(history_id, payload.title)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Analysis history not found.")
+    return entry
+
+
+@app.delete("/history/{history_id}", status_code=204)
+async def delete_history(
+    history_id: str,
+    history: HistoryStore = Depends(get_history_store),
+) -> Response:
+    snapshot = jobs.get(history_id)
+    if snapshot and snapshot.state in {JobState.QUEUED, JobState.RUNNING}:
+        raise HTTPException(status_code=409, detail="Cancel the running job first.")
+    if not history.delete(history_id):
+        raise HTTPException(status_code=404, detail="Analysis history not found.")
+    return Response(status_code=204)
+
+
+@app.get("/history/{history_id}/audio")
+async def get_history_audio(
+    history_id: str,
+    history: HistoryStore = Depends(get_history_store),
+) -> FileResponse:
+    path = history.audio_path(history_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Cached audio not found.")
+    return FileResponse(path, filename=path.name)
 
 
 def _job_or_404(job_id: str) -> JobSnapshot:
