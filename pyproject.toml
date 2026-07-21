@@ -1,0 +1,34 @@
+[project]
+name = "music-insight"
+version = "0.1.0"
+description = "Audio analysis pipeline for lyrics, soundscape, emotion, and literary interpretation."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "av>=18.0.0",
+    "fastapi>=0.116.0",
+    "httpx>=0.27.0",
+    "librosa>=0.11.0",
+    "numpy>=2.0.0",
+    "pydantic>=2.8.0",
+    "pydantic-settings>=2.4.0",
+    "python-multipart>=0.0.9",
+    "streamlit>=1.40.0",
+    "uvicorn[standard]>=0.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,11 @@
+.venv/
+.music_insight/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.DS_Store
+.codex_doc_review/
+.pnpm-store/
+src/model/*.gguf
+test_samples/
