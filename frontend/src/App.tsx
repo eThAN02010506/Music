@@ -55,34 +55,16 @@ function SignalMark() {
 function UploadPanel({
   file,
   language,
-  modelSource,
-  modelEndpoint,
-  localModelPath,
-  defaultEndpoint,
-  localModelRoot,
-  localRunnerAvailable,
   busy,
   onFile,
   onLanguage,
-  onModelSource,
-  onModelEndpoint,
-  onLocalModelPath,
   onAnalyze,
 }: {
   file: File | null;
   language: string;
-  modelSource: "network" | "local";
-  modelEndpoint: string;
-  localModelPath: string;
-  defaultEndpoint: string;
-  localModelRoot: string;
-  localRunnerAvailable: boolean;
   busy: boolean;
   onFile: (file: File) => void;
   onLanguage: (language: string) => void;
-  onModelSource: (source: "network" | "local") => void;
-  onModelEndpoint: (endpoint: string) => void;
-  onLocalModelPath: (path: string) => void;
   onAnalyze: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -135,45 +117,6 @@ function UploadPanel({
         )}
       </div>
 
-      <details className="model-settings">
-        <summary>
-          <span>模型设置</span>
-          <small>{modelSource === "network" ? (modelEndpoint || defaultEndpoint) : `本地 · ${localModelPath || localModelRoot}`}</small>
-        </summary>
-        <div className="model-settings-body">
-          <div className="model-source-tabs" role="group" aria-label="模型来源">
-            <button className={modelSource === "network" ? "active" : ""} onClick={() => onModelSource("network")} type="button">模型接口</button>
-            <button className={modelSource === "local" ? "active" : ""} onClick={() => onModelSource("local")} type="button">本地权重</button>
-          </div>
-          {modelSource === "network" ? (
-            <label className="model-field">
-              <span>OpenAI 兼容接口地址</span>
-              <input
-                value={modelEndpoint}
-                onChange={(event) => onModelEndpoint(event.target.value)}
-                placeholder={defaultEndpoint}
-                disabled={busy}
-              />
-              <small>留空使用默认 8004；也可填写本机 127.0.0.1 地址。</small>
-            </label>
-          ) : (
-            <label className="model-field">
-              <span>本地模型目录或主 GGUF 路径</span>
-              <input
-                value={localModelPath}
-                onChange={(event) => onLocalModelPath(event.target.value)}
-                placeholder={localModelRoot || "src/model"}
-                disabled={busy}
-              />
-              <small>
-                允许目录：{localModelRoot || "src/model"}。后端会自动配对 mmproj。
-                {!localRunnerAvailable && " 当前未检测到 llama-server，提交后会提示安装。"}
-              </small>
-            </label>
-          )}
-        </div>
-      </details>
-
       <div className="upload-actions">
         <label>
           <span>歌词语言</span>
@@ -189,6 +132,70 @@ function UploadPanel({
         </button>
       </div>
     </section>
+  );
+}
+
+function ModelSettings({
+  modelSource,
+  modelEndpoint,
+  localModelPath,
+  defaultEndpoint,
+  localModelRoot,
+  localRunnerAvailable,
+  busy,
+  onModelSource,
+  onModelEndpoint,
+  onLocalModelPath,
+}: {
+  modelSource: "network" | "local";
+  modelEndpoint: string;
+  localModelPath: string;
+  defaultEndpoint: string;
+  localModelRoot: string;
+  localRunnerAvailable: boolean;
+  busy: boolean;
+  onModelSource: (source: "network" | "local") => void;
+  onModelEndpoint: (endpoint: string) => void;
+  onLocalModelPath: (path: string) => void;
+}) {
+  const activeLocation = modelSource === "network"
+    ? (modelEndpoint || defaultEndpoint)
+    : (localModelPath || localModelRoot);
+  return (
+    <details className="topbar-model-settings">
+      <summary aria-label="模型设置">
+        <span className="settings-icon" aria-hidden="true">⌘</span>
+        <span><strong>模型</strong><small>{modelSource === "local" ? "本地权重" : activeLocation.replace(/^https?:\/\//, "")}</small></span>
+        <span className="settings-chevron" aria-hidden="true">⌄</span>
+      </summary>
+      <div className="model-popover">
+        <header>
+          <div><strong>模型设置</strong><small>仅影响下一次分析</small></div>
+          <span className={`runner-dot ${modelSource === "network" || localRunnerAvailable ? "ready" : "missing"}`} />
+        </header>
+        <div className="model-source-tabs" role="group" aria-label="模型来源">
+          <button disabled={busy} className={modelSource === "network" ? "active" : ""} onClick={() => onModelSource("network")} type="button">模型接口</button>
+          <button disabled={busy} className={modelSource === "local" ? "active" : ""} onClick={() => onModelSource("local")} type="button">本地权重</button>
+        </div>
+        {modelSource === "network" ? (
+          <label className="model-field">
+            <span>OpenAI 兼容接口地址</span>
+            <input value={modelEndpoint} onChange={(event) => onModelEndpoint(event.target.value)} placeholder={defaultEndpoint} disabled={busy} />
+            <small>留空使用默认 8004，也可填写本机 127.0.0.1 地址。</small>
+          </label>
+        ) : (
+          <label className="model-field">
+            <span>本地模型目录或主 GGUF 路径</span>
+            <input value={localModelPath} onChange={(event) => onLocalModelPath(event.target.value)} placeholder={localModelRoot || "src/model"} disabled={busy} />
+            <small>
+              允许目录：{localModelRoot || "src/model"}，自动配对 mmproj。
+              {!localRunnerAvailable && " 当前未检测到 llama-server。"}
+            </small>
+          </label>
+        )}
+        {busy && <p className="model-locked">分析进行中，模型设置暂时锁定</p>}
+      </div>
+    </details>
   );
 }
 
@@ -696,9 +703,23 @@ export default function App() {
       <div className="app-main">
         <header className="topbar">
           <a className="brand" href="#top"><SignalMark /><span>Music Insight</span></a>
-          <div className="service-status">
-            <span className={health ? "online" : "offline"} />
-            <div><strong>{health ? "分析服务在线" : "后端未连接"}</strong><small>{health?.model_endpoint || API_BASE}</small></div>
+          <div className="topbar-actions">
+            <div className="service-status">
+              <span className={health ? "online" : "offline"} />
+              <div><strong>{health ? "分析服务在线" : "后端未连接"}</strong><small>{health?.model_endpoint || API_BASE}</small></div>
+            </div>
+            <ModelSettings
+              modelSource={modelSource}
+              modelEndpoint={modelEndpoint}
+              localModelPath={localModelPath}
+              defaultEndpoint={health?.model_endpoint || "http://192.168.1.97:8004"}
+              localModelRoot={health?.local_model_root || "src/model"}
+              localRunnerAvailable={health?.local_runner_available ?? false}
+              busy={Boolean(busy)}
+              onModelSource={setModelSource}
+              onModelEndpoint={setModelEndpoint}
+              onLocalModelPath={setLocalModelPath}
+            />
           </div>
         </header>
 
@@ -707,18 +728,9 @@ export default function App() {
             <UploadPanel
               file={file}
               language={language}
-              modelSource={modelSource}
-              modelEndpoint={modelEndpoint}
-              localModelPath={localModelPath}
-              defaultEndpoint={health?.model_endpoint || "http://192.168.1.97:8004"}
-              localModelRoot={health?.local_model_root || "src/model"}
-              localRunnerAvailable={health?.local_runner_available ?? false}
               busy={Boolean(busy)}
               onFile={chooseFile}
               onLanguage={setLanguage}
-              onModelSource={setModelSource}
-              onModelEndpoint={setModelEndpoint}
-              onLocalModelPath={setLocalModelPath}
               onAnalyze={analyze}
             />
           )}

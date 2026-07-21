@@ -81,6 +81,11 @@ pnpm dev
 
 访问：`http://127.0.0.1:5174`
 
+FastAPI 根地址 `http://127.0.0.1:8000/` 是开发监控台，可实时查看任务阶段、
+进度、最近历史、失败原因和分析警告，并可下载 JSON 诊断报告。点击任一任务
+可查看阶段事件时间线、模型与文件信息、技术指标、歌词、证据和原始 JSON。
+原服务信息 JSON 位于 `/api/info`，交互式 API 文档位于 `/docs`。
+
 Streamlit 保留为调试台：
 
 ```bash
@@ -112,6 +117,10 @@ GET  /history/{id}
 GET  /history/{id}/audio
 PATCH /history/{id}
 DELETE /history/{id}
+GET  /debug/state
+GET  /debug/report
+GET  /debug/tasks/{id}
+GET  /api/info
 ```
 
 任务状态包括 `queued`、`running`、`completed`、`failed` 和 `cancelled`。

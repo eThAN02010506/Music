@@ -34,6 +34,15 @@ class JobSnapshot(BaseModel):
     revision: int = 0
 
 
+class JobEvent(BaseModel):
+    state: JobState
+    stage: str
+    progress: float = Field(ge=0, le=1)
+    message: str
+    timestamp: datetime
+    error: str | None = None
+
+
 class _Job:
     def __init__(self, job_id: str, observer: JobObserver | None = None) -> None:
         now = datetime.now(UTC)
@@ -49,6 +58,15 @@ class _Job:
         self.revision = 0
         self.task: asyncio.Task[None] | None = None
         self.observer = observer
+        self.events = [
+            JobEvent(
+                state=self.state,
+                stage=self.stage,
+                progress=self.progress,
+                message=self.message,
+                timestamp=now,
+            )
+        ]
 
     def snapshot(self) -> JobSnapshot:
         return JobSnapshot(
@@ -71,6 +89,18 @@ class _Job:
     def touch(self) -> None:
         self.updated_at = datetime.now(UTC)
         self.revision += 1
+
+    def record_event(self) -> None:
+        self.events.append(
+            JobEvent(
+                state=self.state,
+                stage=self.stage,
+                progress=self.progress,
+                message=self.message,
+                timestamp=self.updated_at,
+                error=self.error,
+            )
+        )
 
 
 ProgressUpdate = Callable[[str, float, str], Awaitable[None]]
@@ -104,6 +134,15 @@ class AnalysisJobStore:
         job = self._jobs.get(job_id)
         return job.result if job else None
 
+    def list(self, limit: int = 50) -> list[JobSnapshot]:
+        snapshots = [job.snapshot() for job in self._jobs.values()]
+        snapshots.sort(key=lambda item: item.updated_at, reverse=True)
+        return snapshots[: max(1, min(limit, 500))]
+
+    def events(self, job_id: str) -> list[JobEvent]:
+        job = self._jobs.get(job_id)
+        return list(job.events) if job else []
+
     def cancel(self, job_id: str) -> JobSnapshot | None:
         job = self._jobs.get(job_id)
         if not job:
@@ -119,6 +158,7 @@ class AnalysisJobStore:
             job.progress = max(job.progress, min(float(progress), 0.99))
             job.message = message
             job.touch()
+            job.record_event()
             await self._notify_observer(job)
 
         try:
@@ -129,12 +169,14 @@ class AnalysisJobStore:
             job.progress = 1.0
             job.message = "分析完成"
             job.touch()
+            job.record_event()
             await self._notify_observer(job)
         except asyncio.CancelledError:
             job.state = JobState.CANCELLED
             job.stage = "cancelled"
             job.message = "任务已取消"
             job.touch()
+            job.record_event()
             await self._notify_observer(job)
         except Exception as exc:
             job.state = JobState.FAILED
@@ -142,6 +184,7 @@ class AnalysisJobStore:
             job.message = "分析失败"
             job.error = (str(exc).strip() or exc.__class__.__name__)[:1000]
             job.touch()
+            job.record_event()
             await self._notify_observer(job)
 
     @staticmethod

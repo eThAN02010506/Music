@@ -42,6 +42,13 @@ def test_job_store_runs_work_and_exposes_result():
     assert snapshot.progress == 1
     assert snapshot.result_url == f"/jobs/{job_id}/result"
     assert store.result(job_id).summary == "完成"
+    assert store.list()[0].id == job_id
+    assert [event.stage for event in store.events(job_id)] == [
+        "queued",
+        "starting",
+        "audio_analysis",
+        "completed",
+    ]
     assert "event: progress" in snapshot_event(snapshot)
 
 
@@ -53,3 +60,7 @@ def test_api_exposes_background_job_routes():
     assert "/jobs/{job_id}/events" in paths
     assert "/jobs/{job_id}/result" in paths
     assert "/jobs/{job_id}/cancel" in paths
+    assert "/debug/state" in paths
+    assert "/debug/report" in paths
+    assert "/debug/tasks/{task_id}" in paths
+    assert "/api/info" in paths

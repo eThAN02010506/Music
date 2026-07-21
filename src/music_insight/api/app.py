@@ -6,7 +6,7 @@ import shutil
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
 
 from music_insight.adapters.dsp import BasicDspAdapter
 from music_insight.adapters.local_omni import (
@@ -21,6 +21,7 @@ from music_insight.api.history import (
     HistoryStore,
     HistorySummary,
 )
+from music_insight.api.debug import DEBUG_PAGE, debug_state, diagnostic_report, task_detail
 from music_insight.api.jobs import AnalysisJobStore, JobSnapshot, JobState, snapshot_event
 from music_insight.config import Settings, get_settings
 from music_insight.pipeline.orchestrator import AnalysisOrchestrator
@@ -128,8 +129,13 @@ async def health(settings: Settings = Depends(get_settings)) -> dict[str, str | 
     }
 
 
-@app.get("/")
-async def root() -> dict[str, object]:
+@app.get("/", response_class=HTMLResponse)
+async def root() -> HTMLResponse:
+    return HTMLResponse(DEBUG_PAGE)
+
+
+@app.get("/api/info")
+async def api_info() -> dict[str, object]:
     return {
         "name": "Music Insight",
         "status": "ok",
@@ -147,6 +153,39 @@ async def root() -> dict[str, object]:
             "strategy": "30-second audio chunks + same-model text fusion",
         },
     }
+
+
+@app.get("/debug/state")
+async def get_debug_state(
+    settings: Settings = Depends(get_settings),
+    history: HistoryStore = Depends(get_history_store),
+) -> dict[str, object]:
+    return debug_state(jobs, history, settings)
+
+
+@app.get("/debug/report", response_class=PlainTextResponse)
+async def get_debug_report(
+    settings: Settings = Depends(get_settings),
+    history: HistoryStore = Depends(get_history_store),
+) -> PlainTextResponse:
+    report = diagnostic_report(debug_state(jobs, history, settings))
+    return PlainTextResponse(
+        report,
+        headers={
+            "Content-Disposition": "attachment; filename=music-insight-debug.json"
+        },
+    )
+
+
+@app.get("/debug/tasks/{task_id}")
+async def get_debug_task(
+    task_id: str,
+    history: HistoryStore = Depends(get_history_store),
+) -> dict[str, object]:
+    detail = task_detail(task_id, jobs, history)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Debug task not found.")
+    return detail
 
 
 async def _save_asset(
