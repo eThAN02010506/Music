@@ -1,7 +1,14 @@
 from datetime import UTC, datetime
 
 from music_insight.api.history import HistoryStore
-from music_insight.schemas import AnalysisResult, DspResult, Evidence, EvidenceType
+from music_insight.schemas import (
+    AnalysisResult,
+    DspResult,
+    Evidence,
+    EvidenceType,
+    LyricsSegment,
+    TimeSpan,
+)
 
 
 def _result() -> AnalysisResult:
@@ -76,8 +83,27 @@ def test_history_persists_renames_and_deletes(tmp_path):
     assert reloaded.result is not None
     assert reloaded.result.summary == "本地缓存结果"
 
+    revised = store.update_lyrics(
+        "job-1",
+        [
+            LyricsSegment(
+                text="人工校对歌词",
+                span=TimeSpan(start_s=12.0, end_s=16.0),
+            )
+        ],
+    )
+    assert revised is not None
+    assert revised.revision_count == 1
+    assert revised.result is not None
+    assert revised.result.lyrics[0].text == "人工校对歌词"
+    assert revised.result.evidence[-1].source == "用户校对"
+    revisions = store.revisions("job-1")
+    assert len(revisions) == 1
+    assert revisions[0].lyrics == []
+
     assert store.delete("job-1") is True
     assert store.get("job-1") is None
+    assert store.revisions("job-1") == []
     assert not audio.exists()
 
 

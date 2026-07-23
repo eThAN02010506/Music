@@ -97,4 +97,19 @@ export interface HistorySummary {
 export interface HistoryDetail extends HistorySummary {
   result: AnalysisResult | null;
   audio_url: string | null;
+  revision_count: number;
+}
+
+export interface HistoryRevision {
+  id: number;
+  created_at: string;
+  lyrics: LyricsSegment[];
+}
+
+export interface LyricsRetryResult {
+  start_s: number;
+  end_s: number;
+  lyrics: LyricsSegment[];
+  issues: string[];
+  source: string;
 }

@@ -8,6 +8,7 @@ import inspect
 import json
 import math
 from pathlib import Path
+import re
 from time import perf_counter
 from typing import Any
 import wave
@@ -91,6 +92,23 @@ class QwenOmniUnifiedAdapter(UnifiedAudioAdapter):
         self._resolved_model = model
         self.chunk_seconds = max(5.0, min(float(chunk_seconds), 60.0))
 
+    async def retry_lyrics(
+        self,
+        audio_bytes: bytes,
+        duration_s: float,
+        language_hint: str | None,
+    ) -> tuple[list[LyricsSegment], list[str]]:
+        model = await self._model()
+        payload = await self._recover_lyrics_quality(
+            model=model,
+            audio_bytes=audio_bytes,
+            duration_s=duration_s,
+            language_hint=language_hint,
+            issues=["用户请求重新聆听并校准此分块"],
+        )
+        parsed = self._parse_chunk(payload, 1, 0.0, duration_s)
+        return self._filter_lyrics_quality(parsed["lyrics"])
+
     async def analyze(
         self,
         asset: AudioAsset,
@@ -152,7 +170,87 @@ class QwenOmniUnifiedAdapter(UnifiedAudioAdapter):
                 )
                 continue
 
-            if not parsed["lyrics"]:
+            lyrics_recovery_attempted = False
+            original_lyrics = list(parsed["lyrics"])
+            cleaned_lyrics, quality_issues = self._filter_lyrics_quality(
+                parsed["lyrics"]
+            )
+            if quality_issues:
+                lyrics_recovery_attempted = True
+                try:
+                    recovered_payload = await self._recover_lyrics_quality(
+                        model=model,
+                        audio_bytes=audio_bytes,
+                        duration_s=end_s - start_s,
+                        language_hint=asset.language_hint,
+                        issues=quality_issues,
+                    )
+                    recovered = self._parse_chunk(
+                        recovered_payload, index, start_s, end_s
+                    )
+                    recovered_lyrics, recovered_issues = (
+                        self._filter_lyrics_quality(recovered["lyrics"])
+                    )
+                    if recovered_lyrics and not recovered_issues:
+                        parsed["lyrics"] = recovered_lyrics
+                        outcome = "定向重听已替换异常歌词时间轴。"
+                    else:
+                        parsed["lyrics"] = cleaned_lyrics
+                        outcome = (
+                            "定向重听仍有异常，已仅保留原结果中的可靠歌词行。"
+                        )
+                    evidence.append(
+                        Evidence(
+                            id=f"omni.chunk.{index}.quality_retry",
+                            source=self.source,
+                            kind=EvidenceType.OBSERVED,
+                            text=outcome,
+                            confidence=0.6 if parsed["lyrics"] else 0.0,
+                            span=TimeSpan(start_s=start_s, end_s=end_s),
+                            metadata={
+                                "issues": quality_issues,
+                                "recovered_issues": recovered_issues,
+                                "kept_lyrics": len(parsed["lyrics"]),
+                                "original_lyrics": [
+                                    item.model_dump(mode="json")
+                                    for item in original_lyrics
+                                ],
+                                "recovered_lyrics": [
+                                    item.model_dump(mode="json")
+                                    for item in recovered["lyrics"]
+                                ],
+                                "model": model,
+                            },
+                        )
+                    )
+                except Exception as exc:
+                    parsed["lyrics"] = cleaned_lyrics
+                    evidence.append(
+                        Evidence(
+                            id=f"omni.chunk.{index}.quality_retry.unavailable",
+                            source=self.source,
+                            kind=EvidenceType.OBSERVED,
+                            text=(
+                                "歌词时间轴异常，定向重听失败；"
+                                "已仅保留原结果中的可靠歌词行。"
+                            ),
+                            confidence=0.0,
+                            span=TimeSpan(start_s=start_s, end_s=end_s),
+                            metadata={
+                                "issues": quality_issues,
+                                "original_lyrics": [
+                                    item.model_dump(mode="json")
+                                    for item in original_lyrics
+                                ],
+                                "error_type": exc.__class__.__name__,
+                                "error": str(exc)[:500],
+                            },
+                        )
+                    )
+            else:
+                parsed["lyrics"] = cleaned_lyrics
+
+            if not parsed["lyrics"] and not lyrics_recovery_attempted:
                 missing = ["lyrics"]
                 try:
                     recovered_payload = await self._recover_missing(
@@ -416,6 +514,55 @@ class QwenOmniUnifiedAdapter(UnifiedAudioAdapter):
             "response_format": self._recovery_response_format(missing),
             "temperature": 0,
             "max_tokens": 1000,
+        }
+        return await self._chat_json(request, timeout=600.0)
+
+    async def _recover_lyrics_quality(
+        self,
+        model: str,
+        audio_bytes: bytes,
+        duration_s: float,
+        language_hint: str | None,
+        issues: list[str],
+    ) -> dict[str, Any]:
+        encoded = base64.b64encode(audio_bytes).decode("ascii")
+        language_instruction = {
+            "zh": "只转写实际听见的中文原词，不翻译。",
+            "en": "Transcribe only the English words actually heard; do not translate.",
+        }.get(language_hint, "保留歌词原语言，不翻译。")
+        instruction = (
+            f"重新听这段 {duration_s:.2f} 秒音频并修正歌词时间轴。"
+            f"上次结果存在这些质量问题：{'；'.join(issues[:6])}。"
+            f"{language_instruction}"
+            "只返回 lyrics；每项只含一行连续歌词及 start_s、end_s、"
+            "confidence、language。时间必须是当前音频内的相对秒数，"
+            "同一时间不能塞入过多文字，不得重叠、重复或补写听不清的内容。"
+            "无法确认时返回空数组。只输出 JSON。"
+        )
+        request = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是保守的歌词时间轴校对器。"
+                        "宁可省略也不猜测，只输出严格 JSON。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": instruction},
+                        {
+                            "type": "input_audio",
+                            "input_audio": {"data": encoded, "format": "wav"},
+                        },
+                    ],
+                },
+            ],
+            "response_format": self._recovery_response_format(["lyrics"]),
+            "temperature": 0,
+            "max_tokens": 1200,
         }
         return await self._chat_json(request, timeout=600.0)
 
@@ -871,7 +1018,90 @@ class QwenOmniUnifiedAdapter(UnifiedAudioAdapter):
             output.append(item)
             if len(output) >= limit:
                 break
-        return output
+        return sorted(
+            output,
+            key=lambda item: (
+                item.span.start_s if item.span else math.inf,
+                item.span.end_s if item.span else math.inf,
+            ),
+        )
+
+    @classmethod
+    def _filter_lyrics_quality(
+        cls, values: list[LyricsSegment]
+    ) -> tuple[list[LyricsSegment], list[str]]:
+        ordered = sorted(
+            values,
+            key=lambda item: (
+                item.span.start_s if item.span else math.inf,
+                item.span.end_s if item.span else math.inf,
+            ),
+        )
+        kept: list[LyricsSegment] = []
+        issues: list[str] = []
+        for item in ordered:
+            span = item.span
+            if span is None:
+                kept.append(item)
+                continue
+
+            duration = span.end_s - span.start_s
+            units = cls._lyric_units(item.text)
+            if duration <= 0.05:
+                issues.append(f"零长度或过短时间段：{item.text[:24]}")
+                continue
+            if units >= 6 and units / duration > 9.0:
+                issues.append(
+                    f"文字密度过高（{units} 单位/{duration:.2f} 秒）："
+                    f"{item.text[:24]}"
+                )
+                continue
+
+            previous = kept[-1] if kept else None
+            if previous and previous.span:
+                overlap = previous.span.end_s - span.start_s
+                shorter = min(
+                    previous.span.end_s - previous.span.start_s,
+                    duration,
+                )
+                if overlap > 0.5 and overlap / max(shorter, 0.01) > 0.45:
+                    issues.append(f"歌词时间明显重叠：{item.text[:24]}")
+                    continue
+                if cls._near_duplicate(previous, item):
+                    issues.append(f"近邻歌词重复：{item.text[:24]}")
+                    continue
+            kept.append(item)
+        return kept, issues
+
+    @staticmethod
+    def _lyric_units(text: str) -> int:
+        cjk = len(
+            re.findall(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]", text)
+        )
+        latin_words = len(
+            re.findall(r"[A-Za-z0-9]+(?:['’][A-Za-z]+)?", text)
+        )
+        return cjk + latin_words
+
+    @classmethod
+    def _near_duplicate(
+        cls, first: LyricsSegment, second: LyricsSegment
+    ) -> bool:
+        if first.span is None or second.span is None:
+            return False
+        first_text = re.sub(r"\W+", "", first.text.casefold())
+        second_text = re.sub(r"\W+", "", second.text.casefold())
+        if not first_text or not second_text:
+            return False
+        close_in_time = second.span.start_s - first.span.end_s <= 1.0
+        if not close_in_time:
+            return False
+        if first_text == second_text:
+            return True
+        shorter = min(len(first_text), len(second_text))
+        return shorter >= 8 and (
+            first_text in second_text or second_text in first_text
+        )
 
     @staticmethod
     def _deduplicate_evidence(values: list[Evidence], limit: int) -> list[Evidence]:

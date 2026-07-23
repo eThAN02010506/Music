@@ -2,8 +2,10 @@ import type {
   AnalysisResult,
   HealthResult,
   HistoryDetail,
+  HistoryRevision,
   HistorySummary,
   JobSnapshot,
+  LyricsRetryResult,
   ModelProbeResult,
 } from "./types";
 
@@ -58,4 +60,23 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title }),
     }),
+  updateLyrics: (id: string, lyrics: AnalysisResult["lyrics"]) =>
+    request<HistoryDetail>(`/history/${encodeURIComponent(id)}/lyrics`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lyrics }),
+    }),
+  historyRevisions: (id: string) =>
+    request<HistoryRevision[]>(
+      `/history/${encodeURIComponent(id)}/revisions`,
+    ),
+  retryLyrics: (id: string, start_s: number, end_s: number) =>
+    request<LyricsRetryResult>(
+      `/history/${encodeURIComponent(id)}/lyrics/retry`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start_s, end_s }),
+      },
+    ),
 };

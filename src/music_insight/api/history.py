@@ -7,7 +7,12 @@ import sqlite3
 
 from pydantic import BaseModel, Field
 
-from music_insight.schemas import AnalysisResult
+from music_insight.schemas import (
+    AnalysisResult,
+    Evidence,
+    EvidenceType,
+    LyricsSegment,
+)
 
 
 class HistorySummary(BaseModel):
@@ -31,10 +36,34 @@ class HistorySummary(BaseModel):
 class HistoryDetail(HistorySummary):
     result: AnalysisResult | None = None
     audio_url: str | None = None
+    revision_count: int = 0
 
 
 class HistoryRename(BaseModel):
     title: str = Field(min_length=1, max_length=120)
+
+
+class HistoryLyricsUpdate(BaseModel):
+    lyrics: list[LyricsSegment] = Field(max_length=500)
+
+
+class HistoryRevision(BaseModel):
+    id: int
+    created_at: datetime
+    lyrics: list[LyricsSegment]
+
+
+class HistoryLyricsRetryRequest(BaseModel):
+    start_s: float = Field(ge=0)
+    end_s: float = Field(gt=0)
+
+
+class HistoryLyricsRetryResult(BaseModel):
+    start_s: float
+    end_s: float
+    lyrics: list[LyricsSegment]
+    issues: list[str] = Field(default_factory=list)
+    source: str
 
 
 class HistoryStore:
@@ -68,6 +97,18 @@ class HistoryStore:
                     error TEXT,
                     model_source TEXT NOT NULL DEFAULT 'network',
                     model_location TEXT
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS analysis_revisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    analysis_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    result_json TEXT NOT NULL,
+                    FOREIGN KEY (analysis_id) REFERENCES analyses(id)
+                        ON DELETE CASCADE
                 )
                 """
             )
@@ -168,10 +209,16 @@ class HistoryStore:
             return None
         summary = self._summary(row)
         result = self._result(row["result_json"])
+        with self._connect() as connection:
+            revision_count = connection.execute(
+                "SELECT COUNT(*) FROM analysis_revisions WHERE analysis_id = ?",
+                (job_id,),
+            ).fetchone()[0]
         return HistoryDetail(
             **summary.model_dump(),
             result=result,
             audio_url=(f"/history/{job_id}/audio" if self.audio_path(job_id) else None),
+            revision_count=revision_count,
         )
 
     def rename(self, job_id: str, title: str) -> HistoryDetail | None:
@@ -187,9 +234,92 @@ class HistoryStore:
                 return None
         return self.get(job_id)
 
+    def update_lyrics(
+        self, job_id: str, lyrics: list[LyricsSegment]
+    ) -> HistoryDetail | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT result_json FROM analyses WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None or not row["result_json"]:
+                return None
+            result = self._result(row["result_json"])
+            if result is None:
+                return None
+
+            revision_number = (
+                connection.execute(
+                    "SELECT COUNT(*) FROM analysis_revisions WHERE analysis_id = ?",
+                    (job_id,),
+                ).fetchone()[0]
+                + 1
+            )
+            now = datetime.now(UTC)
+            connection.execute(
+                """
+                INSERT INTO analysis_revisions (analysis_id, created_at, result_json)
+                VALUES (?, ?, ?)
+                """,
+                (job_id, now.isoformat(), row["result_json"]),
+            )
+            manual_evidence = Evidence(
+                id=f"manual.lyrics.revision.{revision_number}",
+                source="用户校对",
+                kind=EvidenceType.OBSERVED,
+                text="用户在前端人工修订了歌词及时间轴。",
+                confidence=1.0,
+                metadata={
+                    "revision": revision_number,
+                    "segment_count": len(lyrics),
+                },
+            )
+            revised = result.model_copy(
+                update={
+                    "lyrics": lyrics,
+                    "evidence": [*result.evidence, manual_evidence],
+                }
+            )
+            connection.execute(
+                """
+                UPDATE analyses
+                SET result_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (revised.model_dump_json(), now.isoformat(), job_id),
+            )
+        return self.get(job_id)
+
+    def revisions(self, job_id: str) -> list[HistoryRevision]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, created_at, result_json
+                FROM analysis_revisions
+                WHERE analysis_id = ?
+                ORDER BY id DESC
+                """,
+                (job_id,),
+            ).fetchall()
+        revisions = []
+        for row in rows:
+            result = self._result(row["result_json"])
+            if result is None:
+                continue
+            revisions.append(
+                HistoryRevision(
+                    id=row["id"],
+                    created_at=datetime.fromisoformat(row["created_at"]),
+                    lyrics=result.lyrics,
+                )
+            )
+        return revisions
+
     def delete(self, job_id: str) -> bool:
         path = self.audio_path(job_id)
         with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM analysis_revisions WHERE analysis_id = ?", (job_id,)
+            )
             cursor = connection.execute(
                 "DELETE FROM analyses WHERE id = ?", (job_id,)
             )

@@ -11,6 +11,7 @@ from music_insight.adapters.dsp import BasicDspAdapter
 from music_insight.adapters.openai_compat_utils import parse_json_object
 from music_insight.adapters.qwen_omni_unified import QwenOmniUnifiedAdapter
 from music_insight.api.app import app
+from music_insight.audio import slice_wav
 from music_insight.pipeline.orchestrator import AnalysisOrchestrator
 from music_insight.pipeline.preprocess import Preprocessor
 from music_insight.schemas import (
@@ -111,6 +112,46 @@ class FakeEmotionMissingOmni(QwenOmniUnifiedAdapter):
     async def _recover_missing(self, **kwargs):
         self.recovery_calls += 1
         return {"lyrics": [], "emotion_timeline": []}
+
+    async def _synthesize_report(self, **kwargs):
+        return "final", [], [], []
+
+
+class FakeQualityRetryOmni(QwenOmniUnifiedAdapter):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.quality_recovery_calls = 0
+
+    async def _model(self):
+        return "test-model"
+
+    async def _analyze_chunk(self, **kwargs):
+        return {
+            "lyrics": [
+                {
+                    "text": "等到放晴的那天也许我会比较好一点",
+                    "start_s": 0,
+                    "end_s": 0.2,
+                }
+            ],
+            "instruments": [],
+            "sound_events": [],
+            "emotion_timeline": [],
+            "themes": [],
+            "narrative": "voice",
+        }
+
+    async def _recover_lyrics_quality(self, **kwargs):
+        self.quality_recovery_calls += 1
+        return {
+            "lyrics": [
+                {
+                    "text": "等到放晴那天",
+                    "start_s": 0.2,
+                    "end_s": 1.8,
+                }
+            ]
+        }
 
     async def _synthesize_report(self, **kwargs):
         return "final", [], [], []
@@ -319,6 +360,19 @@ def test_unified_adapter_chunks_wav(tmp_path):
     assert chunks[-1][1:] == (10.0, 12.0)
 
 
+def test_slice_wav_returns_requested_excerpt(tmp_path):
+    audio = tmp_path / "source.wav"
+    _write_test_audio(audio, seconds=4.0, sample_rate=16_000)
+
+    excerpt, duration = slice_wav(audio, 1.25, 3.0)
+    with wave.open(io.BytesIO(excerpt), "rb") as source:
+        frames = source.getnframes()
+        sample_rate = source.getframerate()
+
+    assert duration == pytest.approx(1.75)
+    assert frames / sample_rate == pytest.approx(1.75)
+
+
 def test_chunk_parser_offsets_and_bounds_timestamps():
     adapter = QwenOmniUnifiedAdapter(
         endpoint="http://127.0.0.1:9999", model="test-model"
@@ -515,6 +569,70 @@ def test_unified_adapter_does_not_relisten_for_emotion_only(tmp_path):
     assert result.asr.lyrics[0].text == "hello"
     assert result.scene.emotion_timeline == []
     assert adapter.recovery_calls == 0
+
+
+def test_lyrics_quality_filter_rejects_density_overlap_and_near_duplicates():
+    adapter = QwenOmniUnifiedAdapter(
+        endpoint="http://127.0.0.1:9999", model="test-model"
+    )
+    reliable = LyricsSegment(
+        text="等到放晴那天",
+        span=TimeSpan(start_s=0.0, end_s=2.0),
+    )
+    values = [
+        reliable,
+        LyricsSegment(
+            text="另一句歌词",
+            span=TimeSpan(start_s=1.0, end_s=3.0),
+        ),
+        LyricsSegment(
+            text="这一整句歌词不可能在瞬间唱完",
+            span=TimeSpan(start_s=2.0, end_s=2.2),
+        ),
+        LyricsSegment(
+            text="等到放晴那天",
+            span=TimeSpan(start_s=2.1, end_s=4.0),
+        ),
+    ]
+
+    kept, issues = adapter._filter_lyrics_quality(values)
+
+    assert kept == [reliable]
+    assert any("重叠" in issue for issue in issues)
+    assert any("密度" in issue for issue in issues)
+    assert any("重复" in issue for issue in issues)
+
+
+def test_unified_adapter_relistens_only_bad_lyrics_chunk(tmp_path):
+    audio = tmp_path / "quality-retry.wav"
+    _write_test_audio(audio, seconds=2.0, sample_rate=16_000)
+    adapter = FakeQualityRetryOmni(
+        endpoint="http://127.0.0.1:9999", model="test-model"
+    )
+
+    result = asyncio.run(adapter.analyze(_asset(audio), DspResult()))
+
+    assert adapter.quality_recovery_calls == 1
+    assert [item.text for item in result.asr.lyrics] == ["等到放晴那天"]
+    retry = next(
+        item for item in result.scene.evidence if item.id.endswith(".quality_retry")
+    )
+    assert retry.metadata["issues"]
+    assert retry.metadata["recovered_issues"] == []
+
+
+def test_manual_retry_returns_quality_checked_relative_lyrics():
+    adapter = FakeQualityRetryOmni(
+        endpoint="http://127.0.0.1:9999", model="test-model"
+    )
+
+    lyrics, issues = asyncio.run(
+        adapter.retry_lyrics(b"test-wav", 2.0, "zh")
+    )
+
+    assert [item.text for item in lyrics] == ["等到放晴那天"]
+    assert lyrics[0].span == TimeSpan(start_s=0.2, end_s=1.8)
+    assert issues == []
 
 
 def test_chat_json_retries_malformed_success_response():

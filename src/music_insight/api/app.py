@@ -17,7 +17,11 @@ from music_insight.adapters.local_omni import (
 from music_insight.adapters.qwen_omni_unified import QwenOmniUnifiedAdapter
 from music_insight.api.history import (
     HistoryDetail,
+    HistoryLyricsRetryRequest,
+    HistoryLyricsRetryResult,
+    HistoryLyricsUpdate,
     HistoryRename,
+    HistoryRevision,
     HistoryStore,
     HistorySummary,
 )
@@ -30,11 +34,12 @@ from music_insight.api.model_probe import (
     validate_model_endpoint,
 )
 from music_insight.config import Settings, get_settings
+from music_insight.audio import slice_wav
 from music_insight.pipeline.orchestrator import AnalysisOrchestrator
 from music_insight.pipeline.preprocess import Preprocessor
 from music_insight.pipeline.resources import model_resources
 from music_insight.reporting.markdown import render_markdown_report
-from music_insight.schemas import AnalysisResult
+from music_insight.schemas import AnalysisResult, AudioAsset
 from music_insight.storage.local import LocalAudioStore, UploadTooLargeError
 
 app = FastAPI(title="Music Insight", version="0.1.0")
@@ -312,6 +317,155 @@ async def rename_history(
     if entry is None:
         raise HTTPException(status_code=404, detail="Analysis history not found.")
     return entry
+
+
+@app.patch("/history/{history_id}/lyrics", response_model=HistoryDetail)
+async def update_history_lyrics(
+    history_id: str,
+    payload: HistoryLyricsUpdate,
+    history: HistoryStore = Depends(get_history_store),
+) -> HistoryDetail:
+    entry = history.get(history_id)
+    if entry is None or entry.result is None:
+        raise HTTPException(status_code=404, detail="Analysis history not found.")
+    if any(not segment.text.strip() for segment in payload.lyrics):
+        raise HTTPException(status_code=422, detail="Lyrics text cannot be empty.")
+    duration = entry.duration_s
+    if duration is not None and any(
+        segment.span and segment.span.end_s > duration + 0.5
+        for segment in payload.lyrics
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Lyrics timestamp exceeds audio duration.",
+        )
+    ordered = sorted(
+        payload.lyrics,
+        key=lambda segment: (
+            segment.span.start_s if segment.span else float("inf"),
+            segment.span.end_s if segment.span else float("inf"),
+        ),
+    )
+    revised = history.update_lyrics(history_id, ordered)
+    if revised is None:
+        raise HTTPException(status_code=404, detail="Analysis history not found.")
+    return revised
+
+
+@app.get(
+    "/history/{history_id}/revisions",
+    response_model=list[HistoryRevision],
+)
+async def list_history_revisions(
+    history_id: str,
+    history: HistoryStore = Depends(get_history_store),
+) -> list[HistoryRevision]:
+    if history.get(history_id) is None:
+        raise HTTPException(status_code=404, detail="Analysis history not found.")
+    return history.revisions(history_id)
+
+
+@app.post(
+    "/history/{history_id}/lyrics/retry",
+    response_model=HistoryLyricsRetryResult,
+)
+async def retry_history_lyrics(
+    history_id: str,
+    payload: HistoryLyricsRetryRequest,
+    settings: Settings = Depends(get_settings),
+    history: HistoryStore = Depends(get_history_store),
+) -> HistoryLyricsRetryResult:
+    entry = history.get(history_id)
+    audio_path = history.audio_path(history_id)
+    if entry is None or entry.result is None or audio_path is None:
+        raise HTTPException(status_code=404, detail="Cached analysis audio not found.")
+    if payload.end_s <= payload.start_s:
+        raise HTTPException(
+            status_code=422,
+            detail="Retry end time must be after start time.",
+        )
+    if payload.end_s - payload.start_s > settings.omni_chunk_seconds + 0.5:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Retry range cannot exceed {settings.omni_chunk_seconds:g} seconds.",
+        )
+    if entry.duration_s is not None and payload.end_s > entry.duration_s + 0.5:
+        raise HTTPException(
+            status_code=422,
+            detail="Retry range exceeds audio duration.",
+        )
+
+    asset = AudioAsset(
+        path=audio_path,
+        media_type="audio/wav",
+        size_bytes=audio_path.stat().st_size,
+        language_hint=entry.language,
+    )
+    prepared = await Preprocessor(settings.workspace_dir).prepare(asset)
+    try:
+        audio_bytes, clip_duration = await asyncio.to_thread(
+            slice_wav,
+            prepared.scene.path,
+            payload.start_s,
+            payload.end_s,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unable to prepare retry audio: {str(exc)[:300]}",
+        ) from exc
+
+    orchestrator = get_orchestrator(
+        settings,
+        model_source=entry.model_source,
+        model_endpoint=(
+            entry.model_location if entry.model_source == "network" else None
+        ),
+        local_model_path=(
+            entry.model_location if entry.model_source == "local" else None
+        ),
+    )
+    adapter = orchestrator.unified
+    if not isinstance(adapter, QwenOmniUnifiedAdapter):
+        raise HTTPException(status_code=422, detail="Model does not support retry.")
+    try:
+        if orchestrator.model_gate is None:
+            lyrics, issues = await adapter.retry_lyrics(
+                audio_bytes, clip_duration, entry.language
+            )
+        else:
+            async with orchestrator.model_gate:
+                lyrics, issues = await adapter.retry_lyrics(
+                    audio_bytes, clip_duration, entry.language
+                )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Model retry failed: {str(exc)[:500]}",
+        ) from exc
+
+    shifted = [
+        lyric.model_copy(
+            update={
+                "span": lyric.span.model_copy(
+                    update={
+                        "start_s": lyric.span.start_s + payload.start_s,
+                        "end_s": lyric.span.end_s + payload.start_s,
+                    }
+                )
+                if lyric.span
+                else None
+            }
+        )
+        for lyric in lyrics
+    ]
+    return HistoryLyricsRetryResult(
+        start_s=payload.start_s,
+        end_s=payload.start_s + clip_duration,
+        lyrics=shifted,
+        issues=issues,
+        source=adapter.source,
+    )
 
 
 @app.delete("/history/{history_id}", status_code=204)

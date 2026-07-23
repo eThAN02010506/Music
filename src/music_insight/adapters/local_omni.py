@@ -8,7 +8,12 @@ import shutil
 import httpx
 
 from music_insight.adapters.qwen_omni_unified import QwenOmniUnifiedAdapter
-from music_insight.schemas import AudioAsset, DspResult, UnifiedAudioResult
+from music_insight.schemas import (
+    AudioAsset,
+    DspResult,
+    LyricsSegment,
+    UnifiedAudioResult,
+)
 
 
 class LocalModelConfigurationError(RuntimeError):
@@ -130,3 +135,16 @@ class ManagedLocalOmniAdapter(QwenOmniUnifiedAdapter):
     ) -> UnifiedAudioResult:
         await self.server.ensure_running(self.model_path)
         return await super().analyze(asset, dsp, progress=progress)
+
+    async def retry_lyrics(
+        self,
+        audio_bytes: bytes,
+        duration_s: float,
+        language_hint: str | None,
+    ) -> tuple[list[LyricsSegment], list[str]]:
+        await self.server.ensure_running(self.model_path)
+        return await super().retry_lyrics(
+            audio_bytes,
+            duration_s,
+            language_hint,
+        )
