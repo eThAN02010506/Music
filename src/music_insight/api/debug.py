@@ -17,6 +17,16 @@ def debug_state(
     recent_history = history.list(limit=20)
     recent_jobs = jobs.list(limit=20)
     issues: list[dict[str, str]] = []
+    for job in recent_jobs:
+        if job.persistence_error:
+            issues.append(
+                {
+                    "severity": "error",
+                    "source": job.id,
+                    "message": f"分析结果可用，但历史记录持久化失败：{job.persistence_error}",
+                    "time": job.updated_at.isoformat(),
+                }
+            )
     for entry in recent_history:
         if entry.error:
             issues.append(
@@ -55,6 +65,7 @@ def debug_state(
             "api_endpoint": "http://127.0.0.1:8000",
             "model_endpoint": settings.omni_endpoint,
             "chunk_seconds": settings.omni_chunk_seconds,
+            "model_max_concurrency": settings.omni_max_concurrency,
             "workspace": str(settings.workspace_dir.resolve()),
         },
         "jobs": [item.model_dump(mode="json") for item in recent_jobs],

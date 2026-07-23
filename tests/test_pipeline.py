@@ -29,29 +29,29 @@ from music_insight.storage.local import LocalAudioStore, UploadTooLargeError
 
 
 class FakeUnifiedAdapter:
-    async def analyze(self, asset, dsp):
+    async def analyze(self, asset, dsp, progress=None):
         return UnifiedAudioResult(
             asr=AsrResult(
-                model="8006 Qwen2.5-Omni",
+                model="test Qwen Omni",
                 lyrics=[LyricsSegment(text="夜空中闪烁的星")],
                 evidence=[
                     Evidence(
                         id="omni.transcript",
-                        source="8006 Qwen2.5-Omni",
+                        source="test Qwen Omni",
                         kind=EvidenceType.INFERRED,
                         text="夜空中闪烁的星",
                     )
                 ],
             ),
             scene=AudioSceneResult(
-                model="8006 Qwen2.5-Omni",
+                model="test Qwen Omni",
                 instruments=["钢琴"],
                 themes=["夜空"],
                 narrative="钢琴与平稳节奏构成安静声景。",
                 evidence=[],
             ),
             literary=LiteraryResult(
-                model="8006 Qwen2.5-Omni",
+                model="test Qwen Omni",
                 themes=["夜空", "希望"],
                 narrative="歌词、钢琴和节拍共同形成逐渐明亮的情绪走向。",
                 evidence=[],
@@ -60,7 +60,7 @@ class FakeUnifiedAdapter:
 
 
 class FailingUnifiedAdapter:
-    async def analyze(self, asset, dsp):
+    async def analyze(self, asset, dsp, progress=None):
         raise RuntimeError("unified test failure")
 
 
@@ -184,7 +184,7 @@ def test_orchestrator_uses_only_unified_model(tmp_path):
     assert result.warnings == []
 
 
-def test_orchestrator_degrades_when_8006_fails(tmp_path):
+def test_orchestrator_degrades_when_unified_model_fails(tmp_path):
     audio = tmp_path / "song.wav"
     _write_test_audio(audio)
     orchestrator = AnalysisOrchestrator(
@@ -202,7 +202,7 @@ def test_orchestrator_degrades_when_8006_fails(tmp_path):
 
 def test_chinese_language_gate_rejects_english_transcript():
     result = AsrResult(
-        model="8006 Qwen2.5-Omni",
+        model="test Qwen Omni",
         lyrics=[LyricsSegment(text="Let him sing")],
         evidence=[],
     )
@@ -307,7 +307,7 @@ def test_unified_adapter_chunks_wav(tmp_path):
     audio = tmp_path / "long.wav"
     _write_test_audio(audio, seconds=12.0, sample_rate=16_000)
     adapter = QwenOmniUnifiedAdapter(
-        endpoint="http://127.0.0.1:8006",
+        endpoint="http://127.0.0.1:9999",
         model="test-model",
         chunk_seconds=5.0,
     )
@@ -321,7 +321,7 @@ def test_unified_adapter_chunks_wav(tmp_path):
 
 def test_chunk_parser_offsets_and_bounds_timestamps():
     adapter = QwenOmniUnifiedAdapter(
-        endpoint="http://127.0.0.1:8006", model="test-model"
+        endpoint="http://127.0.0.1:9999", model="test-model"
     )
     parsed = adapter._parse_chunk(
         {
@@ -347,7 +347,7 @@ def test_chunk_parser_offsets_and_bounds_timestamps():
 
 def test_chunk_parser_splits_multiline_lyrics_and_distributes_span():
     adapter = QwenOmniUnifiedAdapter(
-        endpoint="http://127.0.0.1:8006", model="test-model"
+        endpoint="http://127.0.0.1:9999", model="test-model"
     )
     parsed = adapter._parse_chunk(
         {
@@ -370,7 +370,7 @@ def test_chunk_parser_splits_multiline_lyrics_and_distributes_span():
 
 def test_chunk_parser_rejects_prompt_placeholders():
     adapter = QwenOmniUnifiedAdapter(
-        endpoint="http://127.0.0.1:8006", model="test-model"
+        endpoint="http://127.0.0.1:9999", model="test-model"
     )
     parsed = adapter._parse_chunk(
         {
@@ -396,7 +396,7 @@ def test_chunk_parser_rejects_prompt_placeholders():
 
 def test_adapter_normalizes_and_deduplicates_labels():
     adapter = QwenOmniUnifiedAdapter(
-        endpoint="http://127.0.0.1:8006", model="test-model"
+        endpoint="http://127.0.0.1:9999", model="test-model"
     )
     values = adapter._strings(
         ["electricguitar", " electricguitar ", "piano"], limit=10
@@ -407,7 +407,7 @@ def test_adapter_normalizes_and_deduplicates_labels():
 
 def test_adapter_uses_strict_structured_output_schemas():
     adapter = QwenOmniUnifiedAdapter(
-        endpoint="http://127.0.0.1:8006", model="test-model"
+        endpoint="http://127.0.0.1:9999", model="test-model"
     )
 
     assert adapter._chunk_response_format()["type"] == "json_schema"
@@ -425,7 +425,7 @@ def test_unified_adapter_recovers_missing_lyrics(tmp_path):
     audio = tmp_path / "recover.wav"
     _write_test_audio(audio, seconds=2.0, sample_rate=16_000)
     adapter = FakeRecoveringOmni(
-        endpoint="http://127.0.0.1:8006", model="test-model"
+        endpoint="http://127.0.0.1:9999", model="test-model"
     )
 
     result = asyncio.run(adapter.analyze(_asset(audio, language="en"), DspResult()))
@@ -435,11 +435,79 @@ def test_unified_adapter_recovers_missing_lyrics(tmp_path):
     assert any(item.id.endswith(".recovery") for item in result.scene.evidence)
 
 
+def test_unified_adapter_reports_chunk_and_synthesis_progress(tmp_path):
+    audio = tmp_path / "progress.wav"
+    _write_test_audio(audio, seconds=6.0, sample_rate=16_000)
+    adapter = FakeRecoveringOmni(
+        endpoint="http://127.0.0.1:9999",
+        model="test-model",
+        chunk_seconds=5,
+    )
+    updates = []
+
+    async def progress(stage, value, message):
+        updates.append((stage, value, message))
+
+    asyncio.run(
+        adapter.analyze(
+            _asset(audio, language="en"),
+            DspResult(),
+            progress=progress,
+        )
+    )
+
+    assert any("1/2" in message for _, _, message in updates)
+    assert any("2/2" in message for _, _, message in updates)
+    assert [stage for stage, _, _ in updates][-1] == "model_synthesis"
+    assert updates[-1][1] == 1.0
+
+
+def test_orchestrators_share_model_concurrency_gate(tmp_path):
+    class CountingUnified(FakeUnifiedAdapter):
+        def __init__(self):
+            self.active = 0
+            self.maximum_active = 0
+
+        async def analyze(self, asset, dsp, progress=None):
+            self.active += 1
+            self.maximum_active = max(self.maximum_active, self.active)
+            await asyncio.sleep(0.01)
+            self.active -= 1
+            return await super().analyze(asset, dsp, progress)
+
+    async def exercise():
+        first_audio = tmp_path / "first.wav"
+        second_audio = tmp_path / "second.wav"
+        _write_test_audio(first_audio, seconds=1.0)
+        _write_test_audio(second_audio, seconds=1.5)
+        unified = CountingUnified()
+        gate = asyncio.Semaphore(1)
+        first = AnalysisOrchestrator(
+            unified=unified,
+            dsp=FakeDspAdapter(),
+            preprocessor=Preprocessor(tmp_path / "first-work"),
+            model_gate=gate,
+        )
+        second = AnalysisOrchestrator(
+            unified=unified,
+            dsp=FakeDspAdapter(),
+            preprocessor=Preprocessor(tmp_path / "second-work"),
+            model_gate=gate,
+        )
+        await asyncio.gather(
+            first.analyze(_asset(first_audio)),
+            second.analyze(_asset(second_audio)),
+        )
+        return unified.maximum_active
+
+    assert asyncio.run(exercise()) == 1
+
+
 def test_unified_adapter_does_not_relisten_for_emotion_only(tmp_path):
     audio = tmp_path / "emotion-optional.wav"
     _write_test_audio(audio, seconds=2.0, sample_rate=16_000)
     adapter = FakeEmotionMissingOmni(
-        endpoint="http://127.0.0.1:8006", model="test-model"
+        endpoint="http://127.0.0.1:9999", model="test-model"
     )
 
     result = asyncio.run(adapter.analyze(_asset(audio, language="en"), DspResult()))
@@ -451,7 +519,7 @@ def test_unified_adapter_does_not_relisten_for_emotion_only(tmp_path):
 
 def test_chat_json_retries_malformed_success_response():
     adapter = FakeJsonRetryOmni(
-        endpoint="http://127.0.0.1:8006", model="test-model"
+        endpoint="http://127.0.0.1:9999", model="test-model"
     )
     request = {
         "messages": [{"role": "system", "content": "Return JSON."}],
@@ -469,7 +537,7 @@ def test_chat_json_retries_malformed_success_response():
 
 def test_chunk_parser_filters_artificial_boundary_clicks():
     adapter = QwenOmniUnifiedAdapter(
-        endpoint="http://127.0.0.1:8006",
+        endpoint="http://127.0.0.1:9999",
         model="test-model",
         chunk_seconds=30.0,
     )
@@ -495,7 +563,7 @@ def test_chunk_parser_filters_artificial_boundary_clicks():
 
 def test_inferred_atmosphere_is_marked_interpretive_with_basis():
     adapter = QwenOmniUnifiedAdapter(
-        endpoint="http://127.0.0.1:8006", model="test-model"
+        endpoint="http://127.0.0.1:9999", model="test-model"
     )
 
     items = adapter._atmosphere_items(

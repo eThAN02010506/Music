@@ -8,8 +8,8 @@ import type {
   JobSnapshot,
   LyricsSegment,
 } from "./types";
-
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+import { api, ApiError, API_BASE } from "./api";
+import { confidenceClass, percent, seconds } from "./format";
 
 const stageLabels: Record<string, string> = {
   queued: "等待处理",
@@ -17,30 +17,14 @@ const stageLabels: Record<string, string> = {
   preprocessing: "音频预处理",
   dsp: "声学计算",
   audio_analysis: "模型聆听",
+  model_queue: "等待模型",
+  model_synthesis: "模型综合",
   fusion: "证据融合",
   finalizing: "整理报告",
   completed: "分析完成",
   failed: "分析失败",
   cancelled: "已取消",
 };
-
-function seconds(value: number | undefined | null) {
-  if (value == null || Number.isNaN(value)) return "--:--";
-  const minutes = Math.floor(value / 60);
-  const rest = Math.floor(value % 60);
-  return `${minutes}:${rest.toString().padStart(2, "0")}`;
-}
-
-function percent(value: number | null | undefined) {
-  return value == null ? "—" : `${Math.round(value * 100)}%`;
-}
-
-function confidenceClass(value: number | null | undefined) {
-  if (value == null) return "neutral";
-  if (value >= 0.75) return "good";
-  if (value >= 0.4) return "medium";
-  return "low";
-}
 
 function SignalMark() {
   return (
@@ -508,15 +492,13 @@ export default function App() {
   const [comparison, setComparison] = useState<HistoryDetail[]>([]);
 
   const refreshHistory = () => {
-    fetch(`${API_BASE}/history`)
-      .then((response) => response.ok ? response.json() : Promise.reject())
+    api.history()
       .then(setHistory)
       .catch(() => setHistory([]));
   };
 
   useEffect(() => {
-    fetch(`${API_BASE}/health`)
-      .then((response) => response.ok ? response.json() : Promise.reject())
+    api.health()
       .then(setHealth)
       .catch(() => setHealth(null));
     refreshHistory();
@@ -534,9 +516,7 @@ export default function App() {
         terminal = true;
         events.close();
         try {
-          const response = await fetch(`${API_BASE}/jobs/${snapshot.id}/result`);
-          if (!response.ok) throw new Error("无法读取分析结果");
-          setResult(await response.json());
+          setResult(await api.jobResult(snapshot.id));
           setActiveHistoryId(snapshot.id);
           refreshHistory();
         } catch (cause) {
@@ -587,12 +567,7 @@ export default function App() {
       form.append("local_model_path", localModelPath.trim() || health?.local_model_root || "src/model");
     }
     try {
-      const response = await fetch(`${API_BASE}/jobs`, { method: "POST", body: form });
-      if (!response.ok) {
-        const detail = await response.text();
-        throw new Error(`后端返回 HTTP ${response.status}: ${detail}`);
-      }
-      const snapshot = await response.json() as JobSnapshot;
+      const snapshot = await api.createJob(form);
       setJob(snapshot);
       setActiveHistoryId(snapshot.id);
       refreshHistory();
@@ -603,8 +578,11 @@ export default function App() {
 
   const cancel = async () => {
     if (!job) return;
-    const response = await fetch(`${API_BASE}/jobs/${job.id}/cancel`, { method: "POST" });
-    if (response.ok) setJob(await response.json());
+    try {
+      setJob(await api.cancelJob(job.id));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "取消失败");
+    }
   };
 
   const newAnalysis = () => {
@@ -623,17 +601,18 @@ export default function App() {
     setError("");
     setComparison([]);
     try {
-      const response = await fetch(`${API_BASE}/history/${id}`);
-      if (!response.ok) throw new Error("无法读取历史分析");
-      const entry = await response.json() as HistoryDetail;
+      const entry = await api.historyDetail(id);
       setActiveHistoryId(id);
       setFile(null);
       setFileName(entry.file_name);
       setResult(entry.result);
       setAudioUrl(entry.audio_url ? `${API_BASE}${entry.audio_url}` : "");
       if (entry.state === "running" || entry.state === "queued") {
-        const jobResponse = await fetch(`${API_BASE}/jobs/${id}`);
-        if (jobResponse.ok) setJob(await jobResponse.json());
+        try {
+          setJob(await api.job(id));
+        } catch {
+          setJob(null);
+        }
       } else {
         setJob(null);
       }
@@ -644,26 +623,26 @@ export default function App() {
 
   const deleteHistory = async (id: string) => {
     try {
-      const response = await fetch(`${API_BASE}/history/${id}`, { method: "DELETE" });
-      if (!response.ok) throw new Error(response.status === 409 ? "请先取消正在运行的任务" : "删除失败");
+      await api.deleteHistory(id);
       if (activeHistoryId === id) newAnalysis();
       setCompareIds((items) => items.filter((item) => item !== id));
       refreshHistory();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "删除失败");
+      setError(cause instanceof ApiError && cause.status === 409
+        ? "请先取消正在运行的任务"
+        : cause instanceof Error ? cause.message : "删除失败");
     }
   };
 
   const renameHistory = async (item: HistorySummary) => {
     const title = window.prompt("重命名分析", item.title)?.trim();
     if (!title || title === item.title) return;
-    const response = await fetch(`${API_BASE}/history/${item.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
-    });
-    if (response.ok) refreshHistory();
-    else setError("重命名失败");
+    try {
+      await api.renameHistory(item.id, title);
+      refreshHistory();
+    } catch {
+      setError("重命名失败");
+    }
   };
 
   const toggleCompare = (id: string) => {
@@ -673,9 +652,7 @@ export default function App() {
   const compareHistory = async () => {
     if (compareIds.length !== 2) return;
     try {
-      const responses = await Promise.all(compareIds.map((id) => fetch(`${API_BASE}/history/${id}`)));
-      if (responses.some((response) => !response.ok)) throw new Error("无法读取对比结果");
-      setComparison(await Promise.all(responses.map((response) => response.json())));
+      setComparison(await Promise.all(compareIds.map(api.historyDetail)));
       setActiveHistoryId(null);
       setJob(null);
       setResult(null);

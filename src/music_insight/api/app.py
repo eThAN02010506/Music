@@ -26,6 +26,7 @@ from music_insight.api.jobs import AnalysisJobStore, JobSnapshot, JobState, snap
 from music_insight.config import Settings, get_settings
 from music_insight.pipeline.orchestrator import AnalysisOrchestrator
 from music_insight.pipeline.preprocess import Preprocessor
+from music_insight.pipeline.resources import model_resources
 from music_insight.reporting.markdown import render_markdown_report
 from music_insight.schemas import AnalysisResult
 from music_insight.storage.local import LocalAudioStore, UploadTooLargeError
@@ -115,6 +116,9 @@ def get_orchestrator(
         preprocessor=Preprocessor(
             workspace_dir=settings.workspace_dir,
         ),
+        model_gate=model_resources.gate(
+            unified.endpoint, settings.omni_max_concurrency
+        ),
     )
 
 
@@ -148,7 +152,7 @@ async def api_info() -> dict[str, object]:
             "docs": "/docs",
         },
         "pipeline": {
-            "unified_model": "Qwen3-Omni 8004",
+            "unified_model": "Qwen Omni（以 /health 当前配置为准）",
             "acoustic_metrics": "librosa (local)",
             "strategy": "30-second audio chunks + same-model text fusion",
         },
@@ -303,6 +307,7 @@ async def delete_history(
         raise HTTPException(status_code=409, detail="Cancel the running job first.")
     if not history.delete(history_id):
         raise HTTPException(status_code=404, detail="Analysis history not found.")
+    jobs.remove(history_id)
     return Response(status_code=204)
 
 

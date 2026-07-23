@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+import asyncio
 import inspect
 import re
 
@@ -26,11 +27,13 @@ class AnalysisOrchestrator:
         dsp: DspAdapter,
         preprocessor: Preprocessor | None = None,
         fusion: FusionEngine | None = None,
+        model_gate: asyncio.Semaphore | None = None,
     ) -> None:
         self.unified = unified
         self.dsp = dsp
         self.preprocessor = preprocessor or Preprocessor()
         self.fusion = fusion or FusionEngine()
+        self.model_gate = model_gate
 
     async def analyze(
         self,
@@ -46,9 +49,26 @@ class AnalysisOrchestrator:
             dsp_result = DspResult(
                 evidence=[self._error_evidence("dsp", "librosa DSP", exc)]
             )
-        await self._notify(progress, "audio_analysis", 0.36, "模型正在分块聆听音频")
+        await self._notify(progress, "model_queue", 0.32, "正在等待模型资源")
         try:
-            unified_result = await self.unified.analyze(prepared.scene, dsp_result)
+            async def model_progress(
+                stage: str, model_progress: float, message: str
+            ) -> None:
+                overall = 0.36 + max(0.0, min(model_progress, 1.0)) * 0.56
+                await self._notify(progress, stage, overall, message)
+
+            if self.model_gate is None:
+                unified_result = await self.unified.analyze(
+                    prepared.scene, dsp_result, progress=model_progress
+                )
+            else:
+                async with self.model_gate:
+                    await self._notify(
+                        progress, "audio_analysis", 0.36, "已获得模型资源，开始聆听"
+                    )
+                    unified_result = await self.unified.analyze(
+                        prepared.scene, dsp_result, progress=model_progress
+                    )
             asr_result = unified_result.asr
             scene_result = unified_result.scene
             literary_result = unified_result.literary
@@ -81,7 +101,7 @@ class AnalysisOrchestrator:
             asr_result, asset.language_hint, "omni"
         )
 
-        await self._notify(progress, "fusion", 0.94, "正在整理证据与生成报告")
+        await self._notify(progress, "fusion", 0.94, "正在整理模型与 DSP 证据")
         result = self.fusion.merge(
             asr=asr_result,
             scene=scene_result,

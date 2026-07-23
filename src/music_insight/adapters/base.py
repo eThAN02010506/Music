@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 
 from music_insight.schemas import (
     AsrResult,
@@ -46,5 +47,10 @@ class DspAdapter(ABC):
 
 class UnifiedAudioAdapter(ABC):
     @abstractmethod
-    async def analyze(self, asset: AudioAsset, dsp: DspResult):
+    async def analyze(
+        self,
+        asset: AudioAsset,
+        dsp: DspResult,
+        progress: Callable[[str, float, str], Awaitable[None] | None] | None = None,
+    ):
         raise NotImplementedError

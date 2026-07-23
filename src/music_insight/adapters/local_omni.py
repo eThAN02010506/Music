@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 import shutil
 
@@ -121,6 +122,11 @@ class ManagedLocalOmniAdapter(QwenOmniUnifiedAdapter):
         self.model_path = model_path
         self.source = f"Qwen Omni · local:{model_path}"
 
-    async def analyze(self, asset: AudioAsset, dsp: DspResult) -> UnifiedAudioResult:
+    async def analyze(
+        self,
+        asset: AudioAsset,
+        dsp: DspResult,
+        progress: Callable[[str, float, str], Awaitable[None] | None] | None = None,
+    ) -> UnifiedAudioResult:
         await self.server.ensure_running(self.model_path)
-        return await super().analyze(asset, dsp)
+        return await super().analyze(asset, dsp, progress=progress)

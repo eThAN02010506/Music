@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     omni_models_path: str = "/v1/models"
     omni_model: str | None = None
     omni_chunk_seconds: float = 30.0
+    omni_max_concurrency: int = Field(default=1, ge=1, le=8)
 
     local_model_root: Path = Field(default=Path("src/model"))
     local_omni_endpoint: str = "http://127.0.0.1:8010"

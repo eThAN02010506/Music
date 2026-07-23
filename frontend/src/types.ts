@@ -8,6 +8,7 @@ export interface JobSnapshot {
   message: string;
   result_url: string | null;
   error: string | null;
+  persistence_error: string | null;
   revision: number;
 }
 

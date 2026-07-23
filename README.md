@@ -13,7 +13,8 @@
 
 1. 预处理生成 16 kHz 单声道 WAV。
 2. 本地 librosa 计算整首音乐的 BPM、调性与能量曲线。
-3. 音频按默认 30 秒切块，依次提交给统一模型。
+3. 音频按默认 30 秒切块，依次提交给统一模型；同一模型地址默认只运行一个
+   分析任务，其他任务等待模型资源，避免长音频互相争抢。
 4. 模型每块同时提取歌词、乐器/声源、声音事件、人声情绪和局部描述。
 5. 时间戳转换成整首音乐坐标，并裁剪或丢弃越界事件。
 6. 所有分块完成后，再由同一个模型根据分块证据和 DSP 生成最终报告。
@@ -28,13 +29,16 @@
 - 拒绝提示词占位值、裁剪越界时间戳，并对歌词、声源和事件去重。
 - 歌词缺失时执行一次定向重听；仍无法确认则保守留空。
 - 上传在流式写入过程中执行大小限制，超限文件不会保留。
+- 模型分块与最终综合分别上报进度和耗时；Debug Console 可以查看每个阶段。
+- 内存任务仅保留最近 100 个终态任务，历史删除也会同步清理内存结果。
+- 历史记录持久化失败会单独报告，不会把已经成功的模型分析改写为失败。
 
 ## 当前能力与限制
 
 - 已验证 30 秒和约 4–5 分钟的中文、英文音频可完成上传、DSP、分块分析、
   证据融合和页面展示。
-- 长音频默认按 30 秒串行处理。当前进度在分块阶段统一显示为 36%，直到
-  全部分块完成后才进入融合；约 4–5 分钟音频可能需要数分钟。
+- 长音频默认按 30 秒串行处理。页面会显示当前分块序号、总分块数和最近一块
+  的耗时；约 4–5 分钟音频仍可能需要数分钟。
 - WAV 是当前最稳定的输入格式。MP3、FLAC、M4A、OGG 等格式依赖 PyAV
   解码；少数带有损坏或非 UTF-8 元数据的文件可能标准化失败，建议先转换为
   16 kHz、单声道、16-bit PCM WAV。
@@ -140,6 +144,7 @@ local_model_path=/allowed/path        # local 模式；目录或主 GGUF 文件
 ```bash
 export MUSIC_INSIGHT_OMNI_ENDPOINT=http://192.168.1.97:8004
 export MUSIC_INSIGHT_OMNI_CHUNK_SECONDS=30
+export MUSIC_INSIGHT_OMNI_MAX_CONCURRENCY=1
 export MUSIC_INSIGHT_LOCAL_MODEL_ROOT=src/model
 export MUSIC_INSIGHT_LOCAL_OMNI_ENDPOINT=http://127.0.0.1:8010
 export MUSIC_INSIGHT_LOCAL_LLAMA_SERVER=llama-server
@@ -149,7 +154,7 @@ export MUSIC_INSIGHT_LOCAL_LLAMA_SERVER=llama-server
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/pytest -q
-cd frontend && pnpm build
+cd frontend && pnpm test && pnpm build
 ```
 
 ## 目录
@@ -165,3 +170,7 @@ src/music_insight/
   storage/       # 上传文件
   ui/            # Streamlit 调试台
 ```
+
+模型结构化输出协议位于 `adapters/qwen_omni_schemas.py`，网络请求和页面状态
+调用分别集中在后端适配器与 `frontend/src/api.ts`，避免 UI 组件重复处理
+HTTP 错误和响应解析。

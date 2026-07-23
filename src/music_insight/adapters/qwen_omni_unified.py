@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 import copy
 import io
+import inspect
 import json
+import math
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 import wave
 
@@ -17,6 +20,11 @@ from music_insight.adapters.openai_compat_utils import (
     discover_model,
     extract_chat_content,
     parse_json_object,
+)
+from music_insight.adapters.qwen_omni_schemas import (
+    chunk_response_format,
+    final_response_format,
+    recovery_response_format,
 )
 from music_insight.schemas import (
     AsrResult,
@@ -83,8 +91,14 @@ class QwenOmniUnifiedAdapter(UnifiedAudioAdapter):
         self._resolved_model = model
         self.chunk_seconds = max(5.0, min(float(chunk_seconds), 60.0))
 
-    async def analyze(self, asset: AudioAsset, dsp: DspResult) -> UnifiedAudioResult:
+    async def analyze(
+        self,
+        asset: AudioAsset,
+        dsp: DspResult,
+        progress: Callable[[str, float, str], Awaitable[None] | None] | None = None,
+    ) -> UnifiedAudioResult:
         model = await self._model()
+        total_chunks = self._chunk_count(asset.path)
         lyrics: list[LyricsSegment] = []
         instruments: list[str] = []
         sound_events: list[Evidence] = []
@@ -96,6 +110,13 @@ class QwenOmniUnifiedAdapter(UnifiedAudioAdapter):
         for index, (audio_bytes, start_s, end_s) in enumerate(
             self._wav_chunks(asset.path), start=1
         ):
+            started_at = perf_counter()
+            await self._notify(
+                progress,
+                "audio_analysis",
+                (index - 1) / max(1, total_chunks) * 0.88,
+                f"模型正在分析第 {index}/{total_chunks} 个音频分块",
+            )
             try:
                 payload = await self._analyze_chunk(
                     model=model,
@@ -119,6 +140,15 @@ class QwenOmniUnifiedAdapter(UnifiedAudioAdapter):
                         span=TimeSpan(start_s=start_s, end_s=end_s),
                         metadata={"error_type": exc.__class__.__name__},
                     )
+                )
+                await self._notify(
+                    progress,
+                    "audio_analysis",
+                    index / max(1, total_chunks) * 0.88,
+                    (
+                        f"第 {index}/{total_chunks} 个分块完成，"
+                        f"耗时 {perf_counter() - started_at:.1f} 秒"
+                    ),
                 )
                 continue
 
@@ -199,12 +229,25 @@ class QwenOmniUnifiedAdapter(UnifiedAudioAdapter):
                     metadata={"model": model, "basis": "direct audio"},
                 )
             )
+            await self._notify(
+                progress,
+                "audio_analysis",
+                index / max(1, total_chunks) * 0.88,
+                (
+                    f"第 {index}/{total_chunks} 个分块完成，"
+                    f"耗时 {perf_counter() - started_at:.1f} 秒"
+                ),
+            )
 
         lyrics = self._deduplicate_lyrics(lyrics, 80)
         instruments = self._deduplicate(instruments, 16)
         sound_events = self._deduplicate_evidence(sound_events, 48)
         emotions = self._deduplicate_evidence(emotions, 48)
         chunk_themes = self._deduplicate(chunk_themes, 10)
+        synthesis_started_at = perf_counter()
+        await self._notify(
+            progress, "model_synthesis", 0.9, "模型正在综合全部分块证据"
+        )
         narrative, themes, inferred_atmosphere, synthesis_evidence = (
             await self._synthesize_report(
                 model=model,
@@ -218,6 +261,12 @@ class QwenOmniUnifiedAdapter(UnifiedAudioAdapter):
             )
         )
         evidence.extend(synthesis_evidence)
+        await self._notify(
+            progress,
+            "model_synthesis",
+            1.0,
+            f"模型综合完成，耗时 {perf_counter() - synthesis_started_at:.1f} 秒",
+        )
 
         return UnifiedAudioResult(
             asr=AsrResult(
@@ -254,6 +303,19 @@ class QwenOmniUnifiedAdapter(UnifiedAudioAdapter):
                 evidence=[],
             ),
         )
+
+    @staticmethod
+    async def _notify(
+        callback: Callable[[str, float, str], Awaitable[None] | None] | None,
+        stage: str,
+        progress: float,
+        message: str,
+    ) -> None:
+        if callback is None:
+            return
+        observed = callback(stage, max(0.0, min(float(progress), 1.0)), message)
+        if inspect.isawaitable(observed):
+            await observed
 
     async def _analyze_chunk(
         self,
@@ -505,123 +567,17 @@ class QwenOmniUnifiedAdapter(UnifiedAudioAdapter):
 
     @staticmethod
     def _chunk_response_format() -> dict[str, Any]:
-        timed_item = {
-            "type": "object",
-            "properties": {
-                "text": {"type": "string"},
-                "start_s": {"type": "number", "minimum": 0},
-                "end_s": {"type": "number", "minimum": 0},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-            },
-            "required": ["text"],
-            "additionalProperties": False,
-        }
-        lyric_item = {
-            **timed_item,
-            "properties": {
-                **timed_item["properties"],
-                "language": {"type": "string"},
-            },
-        }
-        return {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "music_chunk_analysis",
-                "strict": True,
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "lyrics": {"type": "array", "items": lyric_item},
-                        "instruments": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "sound_events": {"type": "array", "items": timed_item},
-                        "emotion_timeline": {
-                            "type": "array",
-                            "items": timed_item,
-                        },
-                        "themes": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "narrative": {"type": "string"},
-                    },
-                    "required": [
-                        "lyrics",
-                        "instruments",
-                        "sound_events",
-                        "emotion_timeline",
-                        "themes",
-                        "narrative",
-                    ],
-                    "additionalProperties": False,
-                },
-            },
-        }
+        return chunk_response_format()
 
     @classmethod
     def _recovery_response_format(
         cls, missing: list[str] | None = None
     ) -> dict[str, Any]:
-        chunk_schema = cls._chunk_response_format()["json_schema"]["schema"]
-        requested = [
-            field
-            for field in (missing or ["lyrics", "emotion_timeline"])
-            if field in {"lyrics", "emotion_timeline"}
-        ]
-        return {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "music_missing_fields",
-                "strict": True,
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        field: chunk_schema["properties"][field]
-                        for field in requested
-                    },
-                    "required": requested,
-                    "additionalProperties": False,
-                },
-            },
-        }
+        return recovery_response_format(missing)
 
     @staticmethod
     def _final_response_format() -> dict[str, Any]:
-        atmosphere_item = {
-            "type": "object",
-            "properties": {
-                "text": {"type": "string"},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                "basis": {"type": "string"},
-            },
-            "required": ["text", "confidence", "basis"],
-            "additionalProperties": False,
-        }
-        return {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "music_final_report",
-                "strict": True,
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "themes": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "narrative": {"type": "string"},
-                        "inferred_atmosphere": {
-                            "type": "array",
-                            "items": atmosphere_item,
-                        },
-                    },
-                    "required": ["themes", "narrative", "inferred_atmosphere"],
-                    "additionalProperties": False,
-                },
-            },
-        }
+        return final_response_format()
 
     async def _model(self) -> str:
         if not self._resolved_model:
@@ -652,6 +608,12 @@ class QwenOmniUnifiedAdapter(UnifiedAudioAdapter):
                 end_s = (start_frame + frame_count) / sample_rate
                 yield buffer.getvalue(), start_s, end_s
                 start_frame += frame_count
+
+    def _chunk_count(self, path: Path) -> int:
+        with wave.open(str(path), "rb") as source:
+            sample_rate = source.getframerate()
+            frames_per_chunk = max(1, int(self.chunk_seconds * sample_rate))
+            return max(1, math.ceil(source.getnframes() / frames_per_chunk))
 
     def _parse_chunk(
         self,
