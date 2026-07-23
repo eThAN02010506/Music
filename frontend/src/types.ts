@@ -67,6 +67,15 @@ export interface HealthResult {
   local_runner_available: boolean;
 }
 
+export interface ModelProbeResult {
+  endpoint: string;
+  online: boolean;
+  model: string | null;
+  audio_supported: boolean | null;
+  service: string;
+  detail: string;
+}
+
 export interface HistorySummary {
   id: string;
   title: string;

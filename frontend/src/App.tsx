@@ -7,9 +7,11 @@ import type {
   HistorySummary,
   JobSnapshot,
   LyricsSegment,
+  ModelProbeResult,
 } from "./types";
 import { api, ApiError, API_BASE } from "./api";
 import { confidenceClass, percent, seconds } from "./format";
+import { MODEL_PROFILES, profileForEndpoint } from "./modelProfiles";
 
 const stageLabels: Record<string, string> = {
   queued: "等待处理",
@@ -145,6 +147,28 @@ function ModelSettings({
   const activeLocation = modelSource === "network"
     ? (modelEndpoint || defaultEndpoint)
     : (localModelPath || localModelRoot);
+  const activeProfile = profileForEndpoint(modelEndpoint, defaultEndpoint);
+  const [probe, setProbe] = useState<ModelProbeResult | null>(null);
+  const [probing, setProbing] = useState(false);
+  useEffect(() => setProbe(null), [modelEndpoint, defaultEndpoint]);
+
+  const testModel = async () => {
+    setProbing(true);
+    try {
+      setProbe(await api.probeModel(activeLocation));
+    } catch (cause) {
+      setProbe({
+        endpoint: activeLocation,
+        online: false,
+        model: null,
+        audio_supported: null,
+        service: "OpenAI-compatible",
+        detail: cause instanceof Error ? cause.message : "模型连接测试失败",
+      });
+    } finally {
+      setProbing(false);
+    }
+  };
   return (
     <details className="topbar-model-settings">
       <summary aria-label="模型设置">
@@ -162,11 +186,52 @@ function ModelSettings({
           <button disabled={busy} className={modelSource === "local" ? "active" : ""} onClick={() => onModelSource("local")} type="button">本地权重</button>
         </div>
         {modelSource === "network" ? (
-          <label className="model-field">
-            <span>OpenAI 兼容接口地址</span>
-            <input value={modelEndpoint} onChange={(event) => onModelEndpoint(event.target.value)} placeholder={defaultEndpoint} disabled={busy} />
-            <small>留空使用默认 8004，也可填写本机 127.0.0.1 地址。</small>
-          </label>
+          <>
+            <div className="model-presets" role="group" aria-label="模型预设">
+              {MODEL_PROFILES.filter((profile) => profile.id !== "custom").map((profile) => (
+                <button
+                  key={profile.id}
+                  type="button"
+                  disabled={busy}
+                  className={activeProfile.id === profile.id ? "active" : ""}
+                  onClick={() => onModelEndpoint(
+                    profile.endpoint === defaultEndpoint
+                      ? ""
+                      : profile.endpoint,
+                  )}
+                >
+                  <strong>{profile.name}</strong>
+                  <small>{profile.note}</small>
+                </button>
+              ))}
+            </div>
+            <label className="model-field">
+              <span>OpenAI 兼容接口地址</span>
+              <input value={modelEndpoint} onChange={(event) => onModelEndpoint(event.target.value)} placeholder={defaultEndpoint} disabled={busy} />
+              <small>
+                {activeProfile.id === "minicpm-8005"
+                  ? "8005 当前为 MiniCPM Gateway；若 OpenAI 路由未加载音频模态，分析会明确报告兼容性错误。"
+                  : "留空使用默认 8004，也可填写本机 127.0.0.1 地址。"}
+              </small>
+            </label>
+            <button
+              type="button"
+              className="model-probe-button"
+              disabled={busy || probing}
+              onClick={testModel}
+            >
+              {probing ? "正在测试…" : "测试模型连接"}
+            </button>
+            {probe && (
+              <div className={`model-probe-result ${
+                !probe.online ? "error" : probe.audio_supported === false ? "warning" : "ready"
+              }`}>
+                <strong>{probe.online ? probe.service : "连接失败"}</strong>
+                <span>{probe.detail}</span>
+                {probe.model && <small>{probe.model}</small>}
+              </div>
+            )}
+          </>
         ) : (
           <label className="model-field">
             <span>本地模型目录或主 GGUF 路径</span>

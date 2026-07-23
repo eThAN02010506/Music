@@ -23,6 +23,12 @@ from music_insight.api.history import (
 )
 from music_insight.api.debug import DEBUG_PAGE, debug_state, diagnostic_report, task_detail
 from music_insight.api.jobs import AnalysisJobStore, JobSnapshot, JobState, snapshot_event
+from music_insight.api.model_probe import (
+    ModelProbeRequest,
+    ModelProbeResult,
+    probe_model_endpoint,
+    validate_model_endpoint,
+)
 from music_insight.config import Settings, get_settings
 from music_insight.pipeline.orchestrator import AnalysisOrchestrator
 from music_insight.pipeline.preprocess import Preprocessor
@@ -97,12 +103,15 @@ def get_orchestrator(
             chunk_seconds=settings.omni_chunk_seconds,
         )
     else:
-        from urllib.parse import urlsplit
-
-        endpoint = (model_endpoint or settings.omni_endpoint).strip().rstrip("/")
-        parsed = urlsplit(endpoint)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise HTTPException(status_code=422, detail="Model endpoint must use http or https.")
+        try:
+            endpoint = validate_model_endpoint(
+                model_endpoint or settings.omni_endpoint
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="Model endpoint must use http or https.",
+            ) from exc
         unified = QwenOmniUnifiedAdapter(
             endpoint=endpoint,
             completions_path=settings.omni_completions_path,
@@ -131,6 +140,14 @@ async def health(settings: Settings = Depends(get_settings)) -> dict[str, str | 
         "local_model_root": str(settings.local_model_root.resolve()),
         "local_runner_available": shutil.which(settings.local_llama_server) is not None,
     }
+
+
+@app.post("/models/probe", response_model=ModelProbeResult)
+async def probe_model(payload: ModelProbeRequest) -> ModelProbeResult:
+    try:
+        return await probe_model_endpoint(payload.endpoint)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/", response_class=HTMLResponse)

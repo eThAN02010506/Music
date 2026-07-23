@@ -63,6 +63,7 @@ def test_api_exposes_background_job_routes():
     assert "/debug/state" in paths
     assert "/debug/report" in paths
     assert "/debug/tasks/{task_id}" in paths
+    assert "/models/probe" in paths
     assert "/api/info" in paths
 
 

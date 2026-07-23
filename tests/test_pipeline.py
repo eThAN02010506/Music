@@ -535,6 +535,16 @@ def test_chat_json_retries_malformed_success_response():
     assert adapter.requests[1]["max_tokens"] == 1200
 
 
+def test_adapter_labels_minicpm_model_family():
+    adapter = QwenOmniUnifiedAdapter(
+        endpoint="http://127.0.0.1:9999",
+        model="MiniCPM-o-4_5-Q4_K_M.gguf",
+    )
+
+    assert asyncio.run(adapter._model()) == "MiniCPM-o-4_5-Q4_K_M.gguf"
+    assert adapter.source == "MiniCPM-o · http://127.0.0.1:9999"
+
+
 def test_chunk_parser_filters_artificial_boundary_clicks():
     adapter = QwenOmniUnifiedAdapter(
         endpoint="http://127.0.0.1:9999",

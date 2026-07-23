@@ -4,6 +4,7 @@ import type {
   HistoryDetail,
   HistorySummary,
   JobSnapshot,
+  ModelProbeResult,
 } from "./types";
 
 export const API_BASE = (
@@ -32,6 +33,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<HealthResult>("/health"),
+  probeModel: (endpoint: string) =>
+    request<ModelProbeResult>("/models/probe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint }),
+    }),
   history: () => request<HistorySummary[]>("/history"),
   historyDetail: (id: string) =>
     request<HistoryDetail>(`/history/${encodeURIComponent(id)}`),

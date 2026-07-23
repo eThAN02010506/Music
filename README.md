@@ -52,6 +52,12 @@
   倍频候选供核查。
 - 默认模型仍为 `192.168.1.97:8004`。每次新分析可以在“模型设置”中改用
   其他 OpenAI 兼容地址，或选择后端本机的 GGUF 权重；选择只影响该次任务。
+- 模型设置提供 8004 Qwen3-Omni 与 8005 MiniCPM-o-4.5 预设。8005 当前是
+  实验入口：其 `/v1/chat/completions` 文本请求可用，但当前部署未在该路由
+  加载音频模态，会返回 `audio input is not supported`。MiniCPM Gateway
+  的 `/api/chat` 尚未接入，因此现阶段不能据此比较模型本身的音频准确度。
+- 模型设置中的“测试模型连接”会在上传前读取模型名称和音频模态状态；
+  探测不会创建分析任务。音频明确关闭时应先修复模型服务再上传。
 - 本地权重模式需要支持该 Qwen Omni GGUF 的 `llama-server`。后端会在
   `MUSIC_INSIGHT_LOCAL_MODEL_ROOT` 内查找主 GGUF 和 `mmproj*.gguf`，并在
   `127.0.0.1:8010` 启动服务。运行器缺失或路径无效时创建任务会明确报错，
@@ -125,6 +131,7 @@ GET  /debug/state
 GET  /debug/report
 GET  /debug/tasks/{id}
 GET  /api/info
+POST /models/probe
 ```
 
 任务状态包括 `queued`、`running`、`completed`、`failed` 和 `cancelled`。

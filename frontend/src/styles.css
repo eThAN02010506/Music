@@ -111,6 +111,19 @@ h1 { font: 600 clamp(36px, 5vw, 64px)/1.06 "Space Grotesk", "Noto Sans SC", sans
 .model-source-tabs button { flex: 1; border: 0; border-radius: 5px; padding: 9px 7px; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; }
 .model-source-tabs button.active { color: #0b130d; background: var(--accent); font-weight: 700; }
 .model-source-tabs button:disabled { cursor: not-allowed; opacity: .55; }
+.model-presets { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; margin: 12px 0; }
+.model-presets button { min-width: 0; padding: 9px; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; color: var(--ink); }
+.model-presets button strong,.model-presets button small { display: block; overflow: hidden; text-overflow: ellipsis; }
+.model-presets button strong { font-size: 10px; white-space: nowrap; }
+.model-presets button small { margin-top: 4px; color: var(--muted); font-size: 8px; line-height: 1.35; }
+.model-presets button.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.model-probe-button { width: 100%; margin-top: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: #17211b; color: var(--ink); cursor: pointer; font-size: 10px; }
+.model-probe-button:disabled { cursor: not-allowed; opacity: .55; }
+.model-probe-result { margin-top: 9px; padding: 9px 10px; border-left: 2px solid var(--accent); background: #142018; font-size: 9px; line-height: 1.5; }
+.model-probe-result strong,.model-probe-result span,.model-probe-result small { display: block; }
+.model-probe-result span,.model-probe-result small { margin-top: 3px; color: var(--muted); overflow-wrap: anywhere; }
+.model-probe-result.warning { border-color: var(--warm); }
+.model-probe-result.error { border-color: var(--danger); }
 .model-field { display: flex; flex-direction: column; gap: 7px; color: var(--muted); font-size: 10px; }
 .model-field input { width: 100%; color: var(--ink); background: #101917; border: 1px solid #34413c; border-radius: 7px; padding: 10px 11px; outline: none; font: 11px "DM Mono", monospace; }
 .model-field input:focus { border-color: var(--accent); }

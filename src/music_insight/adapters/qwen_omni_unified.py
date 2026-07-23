@@ -584,6 +584,8 @@ class QwenOmniUnifiedAdapter(UnifiedAudioAdapter):
             self._resolved_model = await discover_model(
                 self.endpoint, self.models_path
             )
+        if "minicpm" in self._resolved_model.lower():
+            self.source = f"MiniCPM-o · {self.endpoint}"
         return self._resolved_model
 
     def _wav_chunks(self, path: Path) -> Iterator[tuple[bytes, float, float]]:
