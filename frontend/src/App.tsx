@@ -10,6 +10,7 @@ import type {
   LyricsRetryResult,
   LyricsSegment,
   ModelProbeResult,
+  SingingScore,
 } from "./types";
 import { api, ApiError, API_BASE } from "./api";
 import { confidenceClass, percent, seconds } from "./format";
@@ -282,6 +283,155 @@ function TagList({ items, empty = "暂无可靠结果" }: { items: string[]; emp
 
 function Confidence({ value }: { value: number | null }) {
   return <span className={`confidence ${confidenceClass(value)}`}>{percent(value)}</span>;
+}
+
+function SingingComparison({ historyId }: { historyId: string | null }) {
+  const recorder = useRef<MediaRecorder | null>(null);
+  const stream = useRef<MediaStream | null>(null);
+  const chunks = useRef<Blob[]>([]);
+  const [recording, setRecording] = useState(false);
+  const [attempt, setAttempt] = useState<Blob | null>(null);
+  const [attemptName, setAttemptName] = useState("my-singing.webm");
+  const [attemptUrl, setAttemptUrl] = useState("");
+  const [score, setScore] = useState<SingingScore | null>(null);
+  const [scoring, setScoring] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => () => {
+    stream.current?.getTracks().forEach((track) => track.stop());
+    if (attemptUrl) URL.revokeObjectURL(attemptUrl);
+  }, [attemptUrl]);
+
+  const useAttempt = (blob: Blob, name: string) => {
+    if (attemptUrl) URL.revokeObjectURL(attemptUrl);
+    setAttempt(blob);
+    setAttemptName(name);
+    setAttemptUrl(URL.createObjectURL(blob));
+    setScore(null);
+    setError("");
+  };
+
+  const startRecording = async () => {
+    setError("");
+    try {
+      stream.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+      chunks.current = [];
+      const next = new MediaRecorder(stream.current);
+      next.ondataavailable = (event) => {
+        if (event.data.size) chunks.current.push(event.data);
+      };
+      next.onstop = () => {
+        const blob = new Blob(chunks.current, {
+          type: next.mimeType || "audio/webm",
+        });
+        useAttempt(blob, "my-singing.webm");
+        stream.current?.getTracks().forEach((track) => track.stop());
+        stream.current = null;
+      };
+      recorder.current = next;
+      next.start();
+      setRecording(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法使用麦克风");
+    }
+  };
+
+  const stopRecording = () => {
+    recorder.current?.stop();
+    recorder.current = null;
+    setRecording(false);
+  };
+
+  const runScore = async () => {
+    if (!historyId || !attempt) return;
+    setScoring(true);
+    setError("");
+    try {
+      setScore(await api.scoreSinging(historyId, attempt, attemptName));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "演唱评分失败");
+    } finally {
+      setScoring(false);
+    }
+  };
+
+  return (
+    <section className="panel singing-panel">
+      <header>
+        <div><span className="section-number">06</span><h3>演唱对比</h3></div>
+        <small>本地声学评分 · 不由大模型决定总分</small>
+      </header>
+      <div className="singing-actions">
+        <button
+          type="button"
+          className={recording ? "recording" : ""}
+          disabled={!historyId}
+          onClick={() => recording ? stopRecording() : void startRecording()}
+        >
+          {recording ? "■ 停止录音" : "● 开始演唱"}
+        </button>
+        <label>
+          上传录音
+          <input
+            type="file"
+            accept="audio/*,.wav,.mp3,.m4a,.webm,.ogg"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) useAttempt(file, file.name);
+            }}
+          />
+        </label>
+        <button
+          type="button"
+          className="score-button"
+          disabled={!attempt || !historyId || scoring || recording}
+          onClick={() => void runScore()}
+        >
+          {scoring ? "正在对齐音高与节奏…" : "开始评分"}
+        </button>
+      </div>
+      {attemptUrl && <audio src={attemptUrl} controls preload="metadata" />}
+      {error && <p className="singing-error">{error}</p>}
+      {score && (
+        <div className="score-result">
+          <div className="total-score">
+            <strong>{score.total}</strong><span>/ 100</span><small>综合得分</small>
+          </div>
+          <div className="score-breakdown">
+            {[
+              ["音准", score.pitch],
+              ["节奏", score.rhythm],
+              ["完整度", score.completeness],
+              ["稳定性", score.stability],
+            ].map(([label, value]) => (
+              <div key={label}>
+                <span>{label}</span><strong>{value}</strong>
+                <i><b style={{ width: `${value}%` }} /></i>
+              </div>
+            ))}
+          </div>
+          <div className="pitch-error-strip" aria-label="音高误差时间轴">
+            {score.pitch_curve.map((point, index) => {
+              const errorValue = point.error_semitones;
+              const level = errorValue == null ? "missing"
+                : errorValue <= 0.5 ? "good"
+                : errorValue <= 1.5 ? "medium" : "bad";
+              return <span key={index} className={level} title={
+                errorValue == null ? "无可比音高" : `偏差 ${errorValue} 半音`
+              } />;
+            })}
+          </div>
+          <p className="score-summary">
+            音高误差中位数：
+            {score.median_pitch_error == null ? "证据不足" : `${score.median_pitch_error} 半音`}
+            {score.in_tune_ratio != null && ` · 半音内命中 ${percent(score.in_tune_ratio)}`}
+          </p>
+          {score.notes.map((note) => <p className="score-note" key={note}>{note}</p>)}
+        </div>
+      )}
+    </section>
+  );
 }
 
 function ResultPanel({
@@ -786,6 +936,7 @@ function ResultPanel({
           </div>
         ) : <p className="empty-copy">证据不足，未生成推断氛围</p>}
       </section>
+      <SingingComparison historyId={historyId} />
     </div>
   );
 }

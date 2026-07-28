@@ -170,7 +170,7 @@ audio { width: min(520px, 100%); height: 34px; filter: invert(.88) hue-rotate(60
 
 .result-grid { display: grid; grid-template-columns: 1.65fr 1fr; gap: 20px; }
 .side-stack { display: flex; flex-direction: column; gap: 20px; }
-.lyrics-panel, .compact-panel, .emotion-panel, .atmosphere-panel { padding: 26px; }
+.lyrics-panel, .compact-panel, .emotion-panel, .atmosphere-panel, .singing-panel { padding: 26px; }
 .panel header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
 .panel header > div { display: flex; align-items: center; gap: 12px; }
 .panel h3 { font-size: 15px; margin: 0; }
@@ -249,6 +249,34 @@ audio { width: min(520px, 100%); height: 34px; filter: invert(.88) hue-rotate(60
 .atmosphere-grid strong { font-size: 13px; }
 .atmosphere-grid p { color: var(--muted); font-size: 10px; line-height: 1.6; margin: 10px 0 0; }
 
+.singing-actions { display: flex; align-items: center; gap: 9px; padding-top: 20px; }
+.singing-actions button, .singing-actions label { border: 1px solid #34443d; border-radius: 8px; background: #121d18; color: var(--muted); padding: 10px 13px; font-size: 10px; cursor: pointer; }
+.singing-actions button:hover:not(:disabled), .singing-actions label:hover { border-color: var(--accent); color: var(--ink); }
+.singing-actions button.recording { border-color: var(--danger); color: var(--danger); background: rgba(255,132,111,.08); }
+.singing-actions button.score-button { margin-left: auto; border-color: #4f7655; color: var(--accent); background: var(--accent-dim); }
+.singing-actions button:disabled { opacity: .4; cursor: not-allowed; }
+.singing-panel > audio { margin-top: 16px; }
+.singing-error { color: var(--danger); font-size: 10px; }
+.score-result { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 22px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line); }
+.total-score { min-height: 136px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px solid #3b5942; border-radius: 12px; background: #101b15; }
+.total-score strong { color: var(--accent); font: 600 48px "Space Grotesk", sans-serif; line-height: 1; }
+.total-score span { color: var(--muted); font: 10px "DM Mono", monospace; }
+.total-score small { color: var(--ink); font-size: 10px; margin-top: 9px; }
+.score-breakdown { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 18px; }
+.score-breakdown > div { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 7px; }
+.score-breakdown span { color: var(--muted); font-size: 10px; }
+.score-breakdown strong { color: var(--ink); font: 500 14px "DM Mono", monospace; }
+.score-breakdown i { grid-column: 1 / -1; height: 4px; border-radius: 4px; overflow: hidden; background: #27312d; }
+.score-breakdown b { display: block; height: 100%; background: var(--accent); }
+.pitch-error-strip { grid-column: 1 / -1; display: flex; gap: 2px; height: 24px; padding: 5px; border: 1px solid var(--line); border-radius: 7px; }
+.pitch-error-strip span { flex: 1; min-width: 1px; border-radius: 2px; }
+.pitch-error-strip .good { background: var(--accent); }
+.pitch-error-strip .medium { background: var(--warm); }
+.pitch-error-strip .bad { background: var(--danger); }
+.pitch-error-strip .missing { background: #2c3732; }
+.score-summary, .score-note { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 10px; }
+.score-note { color: #66746c; }
+
 .comparison { padding: 38px; }
 .comparison h2 { font: 600 34px "Space Grotesk", "Noto Sans SC", sans-serif; margin: 0 0 28px; }
 .comparison-grid { display: grid; grid-template-columns: 120px repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--line); }
@@ -305,5 +333,9 @@ footer { width: min(1180px, calc(100% - 40px)); margin: 0 auto; border-top: 1px 
   .lyrics-editor-row input:nth-child(3) { grid-column: 1 / 3; grid-row: 2; }
   .lyrics-editor-row button { grid-column: 3; grid-row: 1 / 3; }
   .quality-compare { grid-template-columns: 1fr; }
+  .singing-actions { align-items: stretch; flex-direction: column; }
+  .singing-actions button.score-button { margin-left: 0; }
+  .score-result { grid-template-columns: 1fr; }
+  .score-breakdown { grid-template-columns: 1fr; }
   footer { width: calc(100% - 24px); }
 }

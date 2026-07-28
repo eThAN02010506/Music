@@ -76,6 +76,9 @@
   重听过的分块会显示异常原因以及初次、重听结果。
 - 每条歌词可以单独触发所在 30 秒分块的模型重听。新结果先在页面预览，
   只有用户确认后才会替换该范围的歌词并保存为一个可回溯的新版本。
+- “演唱对比”支持浏览器麦克风录音或上传个人演唱，使用本地 DSP 对照当前
+  历史歌曲计算音准、节奏、完整度和稳定性。综合分权重分别为 50%、25%、
+  15% 和 10%，同时显示音高误差时间轴；大模型不参与总分。
 - 勾选两个已完成项目后可并排比较 BPM、调性、歌词数量、乐器、主题、直接
   情绪、推断氛围和摘要。
 
@@ -136,6 +139,7 @@ PATCH /history/{id}
 PATCH /history/{id}/lyrics
 POST  /history/{id}/lyrics/retry
 GET  /history/{id}/revisions
+POST /history/{id}/singing/score
 DELETE /history/{id}
 GET  /debug/state
 GET  /debug/report

@@ -113,3 +113,22 @@ export interface LyricsRetryResult {
   issues: string[];
   source: string;
 }
+
+export interface SingingScore {
+  total: number;
+  pitch: number;
+  rhythm: number;
+  completeness: number;
+  stability: number;
+  median_pitch_error: number | null;
+  in_tune_ratio: number | null;
+  reference_duration_s: number;
+  performance_duration_s: number;
+  pitch_curve: Array<{
+    progress: number;
+    reference_midi: number | null;
+    performance_midi: number | null;
+    error_semitones: number | null;
+  }>;
+  notes: string[];
+}

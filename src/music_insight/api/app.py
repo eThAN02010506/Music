@@ -40,6 +40,7 @@ from music_insight.pipeline.preprocess import Preprocessor
 from music_insight.pipeline.resources import model_resources
 from music_insight.reporting.markdown import render_markdown_report
 from music_insight.schemas import AnalysisResult, AudioAsset
+from music_insight.singing_score import SingingScore, score_singing
 from music_insight.storage.local import LocalAudioStore, UploadTooLargeError
 
 app = FastAPI(title="Music Insight", version="0.1.0")
@@ -171,6 +172,7 @@ async def api_info() -> dict[str, object]:
             "markdown": "POST /analyze/markdown",
             "jobs": "POST /jobs",
             "history": "GET /history",
+            "singing_score": "POST /history/{id}/singing/score",
             "docs": "/docs",
         },
         "pipeline": {
@@ -491,6 +493,37 @@ async def get_history_audio(
     if path is None:
         raise HTTPException(status_code=404, detail="Cached audio not found.")
     return FileResponse(path, filename=path.name)
+
+
+@app.post(
+    "/history/{history_id}/singing/score",
+    response_model=SingingScore,
+)
+async def score_history_singing(
+    history_id: str,
+    file: UploadFile = File(...),
+    settings: Settings = Depends(get_settings),
+    history: HistoryStore = Depends(get_history_store),
+) -> SingingScore:
+    reference_path = history.audio_path(history_id)
+    if reference_path is None:
+        raise HTTPException(status_code=404, detail="Cached reference audio not found.")
+    attempt = await _save_asset(file, None, settings)
+    try:
+        return await asyncio.to_thread(
+            score_singing,
+            reference_path,
+            attempt.path,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Singing score failed: {str(exc)[:500]}",
+        ) from exc
+    finally:
+        attempt.path.unlink(missing_ok=True)
 
 
 def _job_or_404(job_id: str) -> JobSnapshot:

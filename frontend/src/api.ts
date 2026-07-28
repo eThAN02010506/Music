@@ -7,6 +7,7 @@ import type {
   JobSnapshot,
   LyricsRetryResult,
   ModelProbeResult,
+  SingingScore,
 } from "./types";
 
 export const API_BASE = (
@@ -79,4 +80,12 @@ export const api = {
         body: JSON.stringify({ start_s, end_s }),
       },
     ),
+  scoreSinging: (id: string, file: Blob, fileName: string) => {
+    const form = new FormData();
+    form.append("file", file, fileName);
+    return request<SingingScore>(
+      `/history/${encodeURIComponent(id)}/singing/score`,
+      { method: "POST", body: form },
+    );
+  },
 };
