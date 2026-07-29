@@ -54,6 +54,31 @@ class AsrResult(BaseModel):
     evidence: list[Evidence]
 
 
+class AsrVerificationResult(BaseModel):
+    """Timestamped transcript returned by an optional secondary ASR service."""
+
+    model: str
+    segments: list[LyricsSegment] = Field(default_factory=list)
+    segments_received: int = Field(default=0, ge=0)
+    segments_invalid: int = Field(default=0, ge=0)
+    duration_s: float | None = Field(default=None, ge=0)
+    vocals_detected: bool | None = None
+    # Confidence in ``vocals_detected`` (not an unconditional vocal score).
+    vocal_confidence: float | None = Field(default=None, ge=0, le=1)
+    transcript_confidence: float | None = Field(default=None, ge=0, le=1)
+    evidence: list[Evidence] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_segment_accounting(self) -> Self:
+        if self.segments_received == 0 and self.segments:
+            self.segments_received = len(self.segments) + self.segments_invalid
+        if self.segments_received < len(self.segments) + self.segments_invalid:
+            raise ValueError(
+                "segments_received cannot be smaller than parsed plus invalid segments"
+            )
+        return self
+
+
 class AudioSceneResult(BaseModel):
     model: str
     lyrics: list[LyricsSegment] = Field(default_factory=list)
@@ -107,3 +132,11 @@ class UnifiedAudioResult(BaseModel):
     asr: AsrResult
     scene: AudioSceneResult
     literary: LiteraryResult
+
+
+class VerifiedLyricsSynthesisResult(BaseModel):
+    """Report fields regenerated after a secondary ASR changes the lyrics."""
+
+    literary: LiteraryResult
+    inferred_atmosphere: list[Evidence] = Field(default_factory=list)
+    evidence: list[Evidence] = Field(default_factory=list)

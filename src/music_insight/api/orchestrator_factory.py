@@ -14,6 +14,7 @@ from music_insight.adapters.local_omni import (
     ManagedLocalOmniAdapter,
 )
 from music_insight.adapters.network_omni import NetworkOmniAdapter
+from music_insight.adapters.openai_asr_verifier import OpenAIAsrVerifier
 from music_insight.api.model_probe import validate_model_endpoint
 from music_insight.config import Settings
 from music_insight.pipeline.orchestrator import AnalysisOrchestrator
@@ -114,6 +115,53 @@ def build_orchestrator(
             comni_request_timeout=settings.comni_request_timeout_seconds,
             comni_max_message_bytes=settings.comni_max_message_mb * 1024 * 1024,
         )
+    model_limit = (
+        1 if model_source == "local" else settings.omni_max_concurrency
+    )
+    asr_verifier = None
+    asr_gate = None
+    if settings.asr_verifier_enabled:
+        try:
+            asr_endpoint = validate_private_model_endpoint(
+                settings.asr_verifier_endpoint
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="ASR verifier endpoint must use http or https.",
+            ) from exc
+        asr_verifier = OpenAIAsrVerifier(
+            endpoint=asr_endpoint,
+            dialect=settings.asr_verifier_dialect,
+            transcriptions_path=settings.asr_verifier_transcriptions_path,
+            model=settings.asr_verifier_model,
+            api_key=(
+                settings.asr_verifier_api_key.get_secret_value()
+                if settings.asr_verifier_api_key is not None
+                else None
+            ),
+            timeout_seconds=settings.asr_verifier_timeout_seconds,
+            vad=settings.asr_verifier_vad,
+        )
+
+    if (
+        asr_verifier is not None
+        and asr_verifier.endpoint.rstrip("/") == unified.endpoint.rstrip("/")
+    ):
+        shared_gate = model_resources.gate(
+            unified.endpoint,
+            min(model_limit, settings.asr_verifier_max_concurrency),
+        )
+        model_gate = shared_gate
+        asr_gate = shared_gate
+    else:
+        model_gate = model_resources.gate(unified.endpoint, model_limit)
+        if asr_verifier is not None:
+            asr_gate = model_resources.gate(
+                asr_verifier.endpoint,
+                settings.asr_verifier_max_concurrency,
+            )
+
     return AnalysisOrchestrator(
         unified=unified,
         dsp=BasicDspAdapter(),
@@ -122,8 +170,7 @@ def build_orchestrator(
             "music-insight://local-dsp",
             settings.dsp_max_concurrency,
         ),
-        model_gate=model_resources.gate(
-            unified.endpoint,
-            1 if model_source == "local" else settings.omni_max_concurrency,
-        ),
+        model_gate=model_gate,
+        asr_verifier=asr_verifier,
+        asr_gate=asr_gate,
     )

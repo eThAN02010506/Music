@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+import gc
 import io
 from threading import Event
 from typing import Any
@@ -229,6 +230,9 @@ def test_body_limit_returns_413_from_real_fastapi_multipart_parser() -> None:
             receive=_chunked_receive(chunks),
         )
     )
+    # Force any parser-owned temporary files to finalize inside this test so
+    # the ResourceWarning/PytestUnraisable warning gate is deterministic.
+    gc.collect()
 
     assert _status(sent) == 413
     assert route_executed is False

@@ -24,6 +24,7 @@ import {
   LeaderboardPanel,
   StandaloneSingingComparison,
 } from "../singing/SingingViews";
+import { SingingAttemptsPanel } from "../singing/SingingAttemptsPanel";
 import { LatestRequest } from "../../hooks/latestRequest";
 import { tabIndexAfterKey } from "../../hooks/tabKeyboard";
 import { useObjectUrl } from "../../hooks/useObjectUrl";
@@ -70,6 +71,7 @@ export function AuthenticatedWorkspace({
   const [modelEndpoint, setModelEndpoint] = useState("");
   const [localModelPath, setLocalModelPath] = useState("");
   const [startMode, setStartMode] = useState<"analysis" | "singing">("analysis");
+  const [showSingingAttempts, setShowSingingAttempts] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
@@ -153,6 +155,10 @@ export function AuthenticatedWorkspace({
   };
 
   const closeLeaderboard = useCallback(() => setShowLeaderboard(false), []);
+  const closeSingingAttempts = useCallback(
+    () => setShowSingingAttempts(false),
+    [],
+  );
 
   const handleStartModeKeyDown = (
     event: ReactKeyboardEvent<HTMLButtonElement>,
@@ -224,7 +230,17 @@ export function AuthenticatedWorkspace({
             />
             <button
               type="button"
+              className="attempt-history-trigger"
+              aria-label="打开我的演唱记录"
+              onClick={() => setShowSingingAttempts(true)}
+            >
+              <span aria-hidden="true">♫</span>
+              <span><strong>演唱记录</strong><small>个人评分历史</small></span>
+            </button>
+            <button
+              type="button"
               className="leaderboard-trigger"
+              aria-label="打开演唱排行榜"
               onClick={() => setShowLeaderboard(true)}
             >
               <span aria-hidden="true">♜</span>
@@ -232,6 +248,7 @@ export function AuthenticatedWorkspace({
             </button>
             <UserMenu
               user={user}
+              onSingingAttempts={() => setShowSingingAttempts(true)}
               onLeaderboard={() => setShowLeaderboard(true)}
               onLogout={() => void logout()}
             />
@@ -312,6 +329,15 @@ export function AuthenticatedWorkspace({
 
         <footer><span>Music Insight · 本地优先的音乐证据分析</span><span>FastAPI + React</span></footer>
       </div>
+      {showSingingAttempts && (
+        <SingingAttemptsPanel
+          onClose={closeSingingAttempts}
+          onOpenAnalysis={(historyId) => {
+            closeSingingAttempts();
+            void selectHistory(historyId);
+          }}
+        />
+      )}
       {showLeaderboard && <LeaderboardPanel onClose={closeLeaderboard} />}
     </div>
   );

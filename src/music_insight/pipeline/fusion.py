@@ -53,6 +53,14 @@ class FusionEngine:
                 "质量提示："
                 + "；".join(item.text for item in unavailable_evidence)
             )
+        inconclusive_evidence = [
+            item for item in evidence if item.id.endswith(".inconclusive")
+        ]
+        if inconclusive_evidence:
+            warnings.append(
+                "质量提示："
+                + "；".join(item.text for item in inconclusive_evidence)
+            )
 
         return AnalysisResult(
             summary=literary.narrative,

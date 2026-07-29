@@ -86,6 +86,8 @@ async def api_info(
             "history": "GET /history",
             "singing_score": "POST /history/{id}/singing/score",
             "singing_compare": "POST /singing/compare",
+            "singing_attempts": "GET /singing/attempts",
+            "delete_singing_attempt": "DELETE /singing/attempts/{id}",
             "leaderboard": "GET /leaderboard",
             "docs": "/docs",
         },

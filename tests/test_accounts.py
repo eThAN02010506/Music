@@ -1,4 +1,5 @@
 import base64
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 import hashlib
 import sqlite3
@@ -49,7 +50,7 @@ def test_registration_normalizes_username_and_uses_self_describing_scrypt(tmp_pa
     with pytest.raises(UsernameAlreadyExistsError):
         store.register("alice", "another password")
 
-    with sqlite3.connect(store.database_path) as connection:
+    with closing(sqlite3.connect(store.database_path)) as connection, connection:
         password_hash, username_key = connection.execute(
             "SELECT password_hash, username_key FROM users"
         ).fetchone()
@@ -78,7 +79,7 @@ def test_successful_legacy_scrypt_login_transparently_rehashes(tmp_path):
             base64.urlsafe_b64encode(digest).decode(),
         )
     )
-    with sqlite3.connect(store.database_path) as connection:
+    with closing(sqlite3.connect(store.database_path)) as connection, connection:
         connection.execute(
             "UPDATE users SET password_hash = ? WHERE id = ?",
             (legacy_hash, user.id),
@@ -86,7 +87,7 @@ def test_successful_legacy_scrypt_login_transparently_rehashes(tmp_path):
 
     assert store.authenticate("legacy-user", "correct horse") == user
 
-    with sqlite3.connect(store.database_path) as connection:
+    with closing(sqlite3.connect(store.database_path)) as connection, connection:
         upgraded_hash = connection.execute(
             "SELECT password_hash FROM users WHERE id = ?",
             (user.id,),
@@ -102,7 +103,7 @@ def test_sessions_store_only_digest_expire_after_thirty_days_and_revoke(tmp_path
 
     token = store.create_session(user.id, now=now)
 
-    with sqlite3.connect(store.database_path) as connection:
+    with closing(sqlite3.connect(store.database_path)) as connection, connection:
         token_hash, expires_at = connection.execute(
             "SELECT token_hash, expires_at FROM sessions"
         ).fetchone()
@@ -182,6 +183,112 @@ def test_personal_attempts_are_isolated_and_standalone_scores_are_ranked(tmp_pat
     assert board.entries[0].attempts == 2
     assert board.entries[0].pitch == 94
     assert board.entries[0].achieved_at == start + timedelta(days=2)
+
+    assert [
+        attempt.id
+        for attempt in store.list_attempts(first.id, limit=1, offset=1)
+    ] == [first_old.id]
+    assert store.delete_attempt(second.id, first_old.id) is False
+    assert store.delete_attempt(first.id, first_old.id) is True
+    assert store.delete_attempt(first.id, first_old.id) is False
+    assert [attempt.id for attempt in store.list_attempts(first.id)] == [
+        first_best.id
+    ]
+    assert store.leaderboard().entries[0].attempts == 1
+
+
+def test_attempt_keyset_pagination_is_stable_across_ties_and_deletion(tmp_path):
+    store = AccountStore(tmp_path / "accounts.sqlite3")
+    user = store.register("cursor-user", "safe password")
+    timestamp = datetime(2026, 7, 30, 9, tzinfo=UTC)
+    recorded = [
+        store.record_score(
+            user.id,
+            _score(70 + index),
+            created_at=timestamp,
+        )
+        for index in range(12)
+    ]
+    expected_ids = sorted(
+        (attempt.id for attempt in recorded),
+        reverse=True,
+    )
+
+    first_with_lookahead = store.list_attempts(user.id, limit=11)
+    first_page = first_with_lookahead[:10]
+    cursor = first_page[-1]
+    assert len(first_with_lookahead) == 11
+    assert [attempt.id for attempt in first_page] == expected_ids[:10]
+
+    # An offset query would skip one older row after this deletion. The keyset
+    # remains anchored to the immutable (created_at, id) tuple instead.
+    assert store.delete_attempt(user.id, first_page[0].id) is True
+    store.record_score(
+        user.id,
+        _score(99),
+        created_at=timestamp + timedelta(minutes=1),
+    )
+    second_page = store.list_attempts(
+        user.id,
+        limit=11,
+        before_created_at=cursor.created_at,
+        before_id=cursor.id,
+    )
+    assert [attempt.id for attempt in second_page] == expected_ids[10:]
+
+    with pytest.raises(AccountValidationError):
+        store.list_attempts(
+            user.id,
+            before_created_at=cursor.created_at,
+        )
+    with pytest.raises(AccountValidationError):
+        store.list_attempts(
+            user.id,
+            offset=1,
+            before_created_at=cursor.created_at,
+            before_id=cursor.id,
+        )
+
+
+def test_deleting_scores_promotes_personal_best_and_rebuilds_ranks(tmp_path):
+    store = AccountStore(tmp_path / "accounts.sqlite3")
+    first = store.register("first-board", "safe password")
+    second = store.register("second-board", "safe password")
+    start = datetime(2026, 7, 30, 10, tzinfo=UTC)
+    first_lower = store.record_score(
+        first.id,
+        _score(85),
+        created_at=start,
+    )
+    first_best = store.record_score(
+        first.id,
+        _score(95),
+        created_at=start + timedelta(minutes=1),
+    )
+    second_only = store.record_score(
+        second.id,
+        _score(90),
+        created_at=start + timedelta(minutes=2),
+    )
+
+    assert [entry.total for entry in store.leaderboard().entries] == [95, 90]
+
+    assert store.delete_attempt(first.id, first_best.id) is True
+    promoted = store.leaderboard().entries
+    assert [(entry.rank, entry.user_id, entry.total) for entry in promoted] == [
+        (1, second.id, 90),
+        (2, first.id, 85),
+    ]
+    assert promoted[1].attempts == 1
+
+    assert store.delete_attempt(first.id, first_lower.id) is True
+    remaining = store.leaderboard().entries
+    assert [(entry.rank, entry.user_id) for entry in remaining] == [
+        (1, second.id)
+    ]
+
+    assert store.delete_attempt(second.id, second_only.id) is True
+    assert store.leaderboard().entries == []
 
 
 def test_foreign_keys_and_input_validation_are_enabled(tmp_path):

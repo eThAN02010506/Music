@@ -25,10 +25,12 @@ export function historyTime(value: string) {
 
 export function UserMenu({
   user,
+  onSingingAttempts,
   onLeaderboard,
   onLogout,
 }: {
   user: User;
+  onSingingAttempts: () => void;
   onLeaderboard: () => void;
   onLogout: () => void;
 }) {
@@ -45,6 +47,7 @@ export function UserMenu({
           <span className="user-avatar">{initial}</span>
           <p><strong>{user.username}</strong><small>独立本机工作区</small></p>
         </div>
+        <button type="button" onClick={onSingingAttempts}><span>♫</span> 我的演唱记录</button>
         <button type="button" onClick={onLeaderboard}><span>♜</span> 演唱最高分榜</button>
         <button type="button" className="logout" onClick={onLogout}><span>↪</span> 退出登录</button>
       </div>

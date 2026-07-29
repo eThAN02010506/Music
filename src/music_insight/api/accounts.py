@@ -327,20 +327,59 @@ class AccountStore:
         user_id: str,
         *,
         limit: int = 50,
+        offset: int = 0,
+        before_created_at: datetime | None = None,
+        before_id: str | None = None,
     ) -> list[SingingAttempt]:
         bounded_limit = max(1, min(limit, 500))
+        bounded_offset = max(0, offset)
+        clean_before_id = _clean_optional(before_id, max_length=120)
+        if (before_created_at is None) != (clean_before_id is None):
+            raise AccountValidationError(
+                "演唱记录游标必须同时包含 created_at 和 id。"
+            )
+        if before_created_at is not None and bounded_offset:
+            raise AccountValidationError(
+                "演唱记录游标不能与 offset 同时使用。"
+            )
+        cursor_clause = ""
+        parameters: list[object] = [user_id]
+        if before_created_at is not None and clean_before_id is not None:
+            cursor_created_at = _utc_now(before_created_at).isoformat()
+            cursor_clause = """
+                AND (
+                    created_at < ?
+                    OR (created_at = ? AND id < ?)
+                )
+            """
+            parameters.extend(
+                (cursor_created_at, cursor_created_at, clean_before_id)
+            )
+        parameters.extend((bounded_limit, bounded_offset))
         with self._connect() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT *
                 FROM singing_attempts
                 WHERE user_id = ?
+                {cursor_clause}
                 ORDER BY created_at DESC, id DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (user_id, bounded_limit),
+                parameters,
             ).fetchall()
         return [self._attempt(row) for row in rows]
+
+    def delete_attempt(self, user_id: str, attempt_id: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM singing_attempts
+                WHERE id = ? AND user_id = ?
+                """,
+                (attempt_id, user_id),
+            )
+        return cursor.rowcount > 0
 
     def leaderboard(
         self,

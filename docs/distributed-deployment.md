@@ -51,9 +51,15 @@ export MUSIC_INSIGHT_SHARED_AUDIO_DIR=/srv/music-insight-audio
 export MUSIC_INSIGHT_REDIS_JOB_TTL_SECONDS=604800
 export MUSIC_INSIGHT_CELERY_QUEUE_NAME=music-insight.analysis
 export MUSIC_INSIGHT_CELERY_VISIBILITY_TIMEOUT_SECONDS=14400
+# 可选：所有 Worker 必须使用相同的歌词验证配置
+# export MUSIC_INSIGHT_ASR_VERIFIER_ENABLED=true
+# export MUSIC_INSIGHT_ASR_VERIFIER_ENDPOINT=http://192.168.1.97:8003
+# export MUSIC_INSIGHT_ASR_VERIFIER_DIALECT=crisp_asr
+# export MUSIC_INSIGHT_ASR_VERIFIER_VAD=false
 ```
 
-先使用 `pip install ".[dev]"` 安装项目。当前 macOS Python 3.13 会跳过名称
+生产 API/Worker 使用 `pip install .`；只有开发和测试环境需要
+`pip install ".[dev]"`。当前 macOS Python 3.13 会跳过名称
 以 `__editable__` 开头的 `.pth` 文件，因此不要依赖 setuptools editable
 安装来提供 `music-insight-worker` 命令；源码开发仍可显式使用
 `PYTHONPATH=src`。
@@ -94,7 +100,10 @@ PYTHONPATH=src celery \
 2. 能读取 `MUSIC_INSIGHT_SHARED_AUDIO_DIR`。
 3. 能访问配置的局域网模型地址；Worker 会自动探测 OpenAI 音频或 Comni
    Gateway 协议，因此每台 Worker 到模型服务的网络路径必须一致。
-4. 若使用 `model_source=local`，还要安装 `llama-server` 并挂载相同模型路径。
+4. 若设置 `MUSIC_INSIGHT_ASR_VERIFIER_ENABLED=true`，还必须能访问相同的
+   `MUSIC_INSIGHT_ASR_VERIFIER_ENDPOINT`，并使用相同的 dialect、model 与
+   VAD 配置；验证器接收完整标准 WAV，并在每个 Worker 进程内使用独立并发门。
+5. 若使用 `model_source=local`，还要安装 `llama-server` 并挂载相同模型路径。
 
 `MUSIC_INSIGHT_WORKER_CONCURRENCY=1` 只限制一个 Worker 进程。启动 N 个 Worker
 时，同一个模型端点仍可能同时收到 N 个请求；Redis Lua 容量限制管理的是活动

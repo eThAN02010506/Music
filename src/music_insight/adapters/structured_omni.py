@@ -71,12 +71,15 @@ from music_insight.adapters.structured_omni_workflow import (
 )
 from music_insight.schemas import (
     AudioAsset,
+    AudioSceneResult,
     DspResult,
     Evidence,
     EvidenceType,
+    LiteraryResult,
     LyricsSegment,
     TimeSpan,
     UnifiedAudioResult,
+    VerifiedLyricsSynthesisResult,
 )
 from music_insight.teaching.models import (
     MapGenerationContext,
@@ -182,6 +185,76 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
                 dsp,
                 progress,
             )
+
+    async def resynthesize_verified_lyrics(
+        self,
+        lyrics: list[LyricsSegment],
+        scene: AudioSceneResult,
+        dsp: DspResult,
+    ) -> VerifiedLyricsSynthesisResult:
+        """Rebuild lyric-sensitive conclusions without re-listening to audio."""
+
+        async with self._request_scope():
+            model = await self._model()
+            narrative, themes, atmosphere, evidence = (
+                await self._synthesize_report(
+                    model=model,
+                    lyrics=lyrics,
+                    instruments=scene.instruments,
+                    sound_events=scene.sound_events,
+                    emotions=scene.emotion_timeline,
+                    # Chunk themes/descriptions may have been inferred from the
+                    # primary transcript, so they are intentionally excluded.
+                    chunk_themes=[],
+                    chunk_narratives=[],
+                    dsp=dsp,
+                )
+            )
+        if any(item.id.endswith(".error") for item in evidence):
+            raise RuntimeError("统一模型无法基于已验证歌词重新综合报告。")
+
+        rebased_evidence = [
+            item.model_copy(
+                update={
+                    "id": item.id.replace(
+                        "omni.final.",
+                        "omni.final.verified_lyrics.",
+                        1,
+                    ),
+                    "metadata": {
+                        **item.metadata,
+                        "basis": "verified lyrics + audio scene + local DSP",
+                    },
+                }
+            )
+            for item in evidence
+        ]
+        rebased_atmosphere = [
+            item.model_copy(
+                update={
+                    "id": item.id.replace(
+                        "omni.final.",
+                        "omni.final.verified_lyrics.",
+                        1,
+                    ),
+                    "metadata": {
+                        **item.metadata,
+                        "basis_type": "verified_lyrics_resynthesis",
+                    },
+                }
+            )
+            for item in atmosphere
+        ]
+        return VerifiedLyricsSynthesisResult(
+            literary=LiteraryResult(
+                model=self.source,
+                themes=themes,
+                narrative=narrative,
+                evidence=rebased_evidence,
+            ),
+            inferred_atmosphere=rebased_atmosphere,
+            evidence=rebased_evidence,
+        )
 
     async def build_understanding_map(
         self,

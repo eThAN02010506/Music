@@ -10,7 +10,14 @@ from starlette.types import Message, Receive, Scope, Send
 from music_insight.api.capacity import CapacityLimitError, CapacityLimiter
 
 
-class RequestBodyTooLarge(HTTPException):
+class RequestBodyTooLarge(HTTPException, OSError):
+    """Signal an oversized stream through parser cleanup boundaries.
+
+    Starlette's multipart parser closes files accumulated during parsing when
+    its input raises ``OSError``.  The middleware catches this internal signal
+    and still returns the public 413 response.
+    """
+
     def __init__(self, limit: int) -> None:
         super().__init__(
             status_code=413,

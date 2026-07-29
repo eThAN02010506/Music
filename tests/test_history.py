@@ -1,3 +1,4 @@
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 import os
 import sqlite3
@@ -284,7 +285,7 @@ def test_history_migrates_existing_database_with_nullable_owner(tmp_path):
     audio.parent.mkdir()
     audio.write_bytes(b"legacy")
     now = datetime.now(UTC).isoformat()
-    with sqlite3.connect(database_path) as connection:
+    with closing(sqlite3.connect(database_path)) as connection, connection:
         connection.execute(
             """
             CREATE TABLE analyses (
@@ -368,7 +369,7 @@ def test_history_migrates_existing_database_with_nullable_owner(tmp_path):
     assert migrated.bpm == 76.0
     backup_path = tmp_path / "history.pre-v0.sqlite3.bak"
     assert backup_path.is_file()
-    with sqlite3.connect(backup_path) as backup:
+    with closing(sqlite3.connect(backup_path)) as backup, backup:
         backup_columns = {
             row[1] for row in backup.execute("PRAGMA table_info(analyses)")
         }

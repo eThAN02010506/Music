@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "../../api";
+import { useCallback, useEffect, useState } from "react";
+import { api, isAbortError } from "../../api";
+import { ModalDialog } from "../../components/ModalDialog";
 import { percent, seconds } from "../../format";
 import { useAudioRecorder } from "../../hooks/useAudioRecorder";
 import { useObjectUrl } from "../../hooks/useObjectUrl";
@@ -334,130 +335,83 @@ export function LeaderboardPanel({
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const dialogRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    let active = true;
-    const previousFocus = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
-    api.leaderboard()
+    const controller = new AbortController();
+    api.leaderboard(controller.signal)
       .then((next) => {
-        if (active) setEntries(next.entries);
+        if (!controller.signal.aborted) setEntries(next.entries);
       })
       .catch((cause) => {
-        if (active) setError(cause instanceof Error ? cause.message : "排行榜加载失败");
+        if (!isAbortError(cause)) {
+          setError(cause instanceof Error ? cause.message : "排行榜加载失败");
+        }
       })
       .finally(() => {
-        if (active) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       });
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const dialog = dialogRef.current;
-      if (!dialog) return;
-      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      )).filter((element) => !element.hasAttribute("hidden"));
-      if (!focusable.length) {
-        event.preventDefault();
-        dialog.focus();
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const current = document.activeElement;
-      if (event.shiftKey && (current === first || !dialog.contains(current))) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (current === last || !dialog.contains(current))) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    dialogRef.current?.querySelector<HTMLElement>("button")?.focus();
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      active = false;
-      window.removeEventListener("keydown", handleKeyDown);
-      previousFocus?.focus();
-    };
-  }, [onClose]);
+    return () => controller.abort();
+  }, []);
 
   return (
-    <div
-      className="leaderboard-backdrop"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
+    <ModalDialog
+      titleId="leaderboard-title"
+      panelClassName="leaderboard-panel"
+      onClose={onClose}
     >
-      <section
-        ref={dialogRef}
-        className="leaderboard-panel"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="leaderboard-title"
-        tabIndex={-1}
-      >
-        <header>
-          <div>
-            <span className="section-kicker">SINGING LEADERBOARD</span>
-            <h2 id="leaderboard-title">演唱最高分榜</h2>
+      <header>
+        <div>
+          <span className="section-kicker">SINGING LEADERBOARD</span>
+          <h2 id="leaderboard-title">演唱最高分榜</h2>
+        </div>
+        <button type="button" className="dialog-close" onClick={onClose} aria-label="关闭排行榜">×</button>
+      </header>
+      <p className="leaderboard-rule">
+        娱乐最高分榜，每人仅取最高分；不同参考音频仅供娱乐。
+      </p>
+      {loading ? (
+        <div className="leaderboard-state" role="status">正在汇总最高成绩…</div>
+      ) : error ? (
+        <div className="leaderboard-state error" role="alert">{error}</div>
+      ) : entries.length ? (
+        <div className="leaderboard-list">
+          <div className="leaderboard-labels" aria-hidden="true">
+            <span>名次 / 用户</span><span>四项得分</span><span>最高分</span>
           </div>
-          <button type="button" className="leaderboard-close" onClick={onClose} aria-label="关闭排行榜">×</button>
-        </header>
-        <p className="leaderboard-rule">
-          娱乐最高分榜，每人仅取最高分；不同参考音频仅供娱乐。
-        </p>
-        {loading ? (
-          <div className="leaderboard-state">正在汇总最高成绩…</div>
-        ) : error ? (
-          <div className="leaderboard-state error">{error}</div>
-        ) : entries.length ? (
-          <div className="leaderboard-list">
-            <div className="leaderboard-labels" aria-hidden="true">
-              <span>名次 / 用户</span><span>四项得分</span><span>最高分</span>
-            </div>
-            {entries.map((entry) => {
-              const own = entry.is_current_user;
-              return (
-                <article
-                  key={`${entry.rank}-${entry.username}`}
-                  className={`${own ? "own" : ""} ${entry.rank <= 3 ? `podium rank-${entry.rank}` : ""}`}
-                >
-                  <div className="leaderboard-person">
-                    <strong className="leaderboard-rank">{entry.rank}</strong>
-                    <span>
-                      <b>{entry.username}{own && <em>你</em>}</b>
-                      <small>{leaderboardSource(entry.source)} · {entry.attempts} 次评分</small>
-                    </span>
-                  </div>
-                  <div className="leaderboard-breakdown">
-                    <span>音准 <b>{entry.pitch}</b></span>
-                    <span>节奏 <b>{entry.rhythm}</b></span>
-                    <span>完整 <b>{entry.completeness}</b></span>
-                    <span>稳定 <b>{entry.stability}</b></span>
-                  </div>
-                  <div className="leaderboard-total">
-                    <strong>{entry.total}</strong><span>/ 100</span>
-                    <small>{historyTime(entry.created_at)}</small>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="leaderboard-state">
-            <strong>排行榜还没有成绩</strong>
-            <span>完成一次演唱打分后，最高分会出现在这里。</span>
-          </div>
-        )}
-      </section>
-    </div>
+          {entries.map((entry) => {
+            const own = entry.is_current_user;
+            return (
+              <article
+                key={`${entry.rank}-${entry.username}`}
+                className={`${own ? "own" : ""} ${entry.rank <= 3 ? `podium rank-${entry.rank}` : ""}`}
+              >
+                <div className="leaderboard-person">
+                  <strong className="leaderboard-rank">{entry.rank}</strong>
+                  <span>
+                    <b>{entry.username}{own && <em>你</em>}</b>
+                    <small>{leaderboardSource(entry.source)} · {entry.attempts} 次评分</small>
+                  </span>
+                </div>
+                <div className="leaderboard-breakdown">
+                  <span>音准 <b>{entry.pitch}</b></span>
+                  <span>节奏 <b>{entry.rhythm}</b></span>
+                  <span>完整 <b>{entry.completeness}</b></span>
+                  <span>稳定 <b>{entry.stability}</b></span>
+                </div>
+                <div className="leaderboard-total">
+                  <strong>{entry.total}</strong><span>/ 100</span>
+                  <small>{historyTime(entry.created_at)}</small>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="leaderboard-state">
+          <strong>排行榜还没有成绩</strong>
+          <span>完成一次演唱打分后，最高分会出现在这里。</span>
+        </div>
+      )}
+    </ModalDialog>
   );
 }

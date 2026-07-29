@@ -1,3 +1,4 @@
+from contextlib import closing
 import multiprocessing
 from pathlib import Path
 import sqlite3
@@ -20,7 +21,7 @@ def test_shared_database_migration_is_idempotent_for_both_stores(tmp_path):
     HistoryStore(path)
     AccountStore(path)
 
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert (
             connection.execute("PRAGMA user_version").fetchone()[0]
@@ -47,7 +48,7 @@ def test_failed_migration_rolls_back_schema_and_version(
     monkeypatch,
 ):
     path = tmp_path / "legacy.sqlite3"
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         connection.execute("CREATE TABLE legacy_marker (value TEXT)")
         connection.execute("INSERT INTO legacy_marker VALUES ('preserved')")
 
@@ -62,7 +63,7 @@ def test_failed_migration_rolls_back_schema_and_version(
     with pytest.raises(RuntimeError, match="migration failed"):
         database.migrate_database(path)
 
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         tables = {
             row[0]
             for row in connection.execute(
@@ -81,7 +82,7 @@ def test_failed_migration_rolls_back_schema_and_version(
 
 def test_database_migration_is_safe_across_twelve_processes(tmp_path):
     path = tmp_path / "shared-legacy.sqlite3"
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         connection.execute("CREATE TABLE legacy_marker (value TEXT)")
         connection.execute("INSERT INTO legacy_marker VALUES ('preserved')")
 
@@ -96,7 +97,7 @@ def test_database_migration_is_safe_across_twelve_processes(tmp_path):
         process.join(timeout=30)
 
     assert [process.exitcode for process in processes] == [0] * 12
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert (
             connection.execute("PRAGMA user_version").fetchone()[0]

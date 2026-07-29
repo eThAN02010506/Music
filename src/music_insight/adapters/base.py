@@ -4,12 +4,14 @@ from typing import Protocol, runtime_checkable
 
 from music_insight.schemas import (
     AsrResult,
+    AsrVerificationResult,
     AudioAsset,
     AudioSceneResult,
     DspResult,
     LiteraryResult,
     LyricsSegment,
     UnifiedAudioResult,
+    VerifiedLyricsSynthesisResult,
 )
 
 
@@ -17,6 +19,16 @@ class AsrAdapter(ABC):
     @abstractmethod
     async def transcribe(self, asset: AudioAsset) -> AsrResult:
         raise NotImplementedError
+
+
+@runtime_checkable
+class AsrVerifier(Protocol):
+    """Optional secondary ASR contract used to verify primary-model lyrics."""
+
+    source: str
+    endpoint: str
+
+    async def verify(self, asset: AudioAsset) -> AsrVerificationResult: ...
 
 
 class AudioSceneAdapter(ABC):
@@ -71,3 +83,17 @@ class LyricsRetryAdapter(Protocol):
         duration_s: float,
         language_hint: str | None,
     ) -> tuple[list[LyricsSegment], list[str]]: ...
+
+
+@runtime_checkable
+class VerifiedLyricsSynthesisAdapter(Protocol):
+    """Capability to rebuild interpretation from externally verified lyrics."""
+
+    source: str
+
+    async def resynthesize_verified_lyrics(
+        self,
+        lyrics: list[LyricsSegment],
+        scene: AudioSceneResult,
+        dsp: DspResult,
+    ) -> VerifiedLyricsSynthesisResult: ...

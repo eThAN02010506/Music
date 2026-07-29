@@ -184,6 +184,11 @@ export interface SingingAttempt {
   score: SingingScore;
 }
 
+export interface SingingAttemptCursor {
+  created_at: string;
+  id: string;
+}
+
 export type AudioDimension =
   | "melody"
   | "harmony"

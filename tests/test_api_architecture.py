@@ -152,6 +152,8 @@ def test_create_app_preserves_public_route_contract():
         "/history/{history_id}/lyrics/retry",
         "/history/{history_id}/singing/score",
         "/singing/compare",
+        "/singing/attempts",
+        "/singing/attempts/{attempt_id}",
         "/leaderboard",
         "/analyze",
         "/analyze/markdown",

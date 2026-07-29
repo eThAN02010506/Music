@@ -6,6 +6,7 @@ from music_insight.adapters.model_capabilities import (
     OPENAI_CHAT_PROTOCOL,
 )
 from music_insight.adapters.network_omni import NetworkOmniAdapter
+from music_insight.adapters.openai_asr_verifier import OpenAIAsrVerifier
 from music_insight.api.orchestrator_factory import (
     build_orchestrator,
     validate_private_model_endpoint,
@@ -52,5 +53,63 @@ def test_private_model_endpoint_accepts_local_and_lan(endpoint):
 def test_private_model_endpoint_rejects_public_destinations(endpoint):
     with pytest.raises(HTTPException) as error:
         validate_private_model_endpoint(endpoint)
+
+    assert error.value.status_code == 422
+
+
+def test_factory_builds_configured_asr_verifier_without_hardcoded_port(tmp_path):
+    orchestrator = build_orchestrator(
+        Settings(
+            workspace_dir=tmp_path,
+            asr_verifier_enabled=True,
+            asr_verifier_endpoint="http://192.168.50.20:19433",
+            asr_verifier_transcriptions_path="api/transcribe",
+            asr_verifier_model="custom-whisper",
+            asr_verifier_timeout_seconds=123,
+            asr_verifier_vad=False,
+        ),
+        model_source="network",
+        model_endpoint="http://192.168.50.20:19432",
+    )
+
+    assert isinstance(orchestrator.asr_verifier, OpenAIAsrVerifier)
+    assert orchestrator.asr_verifier.endpoint == "http://192.168.50.20:19433"
+    assert orchestrator.asr_verifier.transcriptions_path == "/api/transcribe"
+    assert orchestrator.asr_verifier.model == "custom-whisper"
+    assert orchestrator.asr_verifier.timeout_seconds == 123
+    assert orchestrator.asr_verifier.vad is False
+    assert orchestrator.asr_gate is not None
+    assert orchestrator.asr_gate is not orchestrator.model_gate
+
+
+def test_factory_shares_gate_when_primary_and_verifier_use_same_endpoint(tmp_path):
+    endpoint = "http://192.168.50.20:19432"
+    orchestrator = build_orchestrator(
+        Settings(
+            workspace_dir=tmp_path,
+            omni_max_concurrency=2,
+            asr_verifier_enabled=True,
+            asr_verifier_endpoint=endpoint,
+            asr_verifier_max_concurrency=1,
+        ),
+        model_source="network",
+        model_endpoint=endpoint,
+    )
+
+    assert orchestrator.asr_gate is orchestrator.model_gate
+    assert orchestrator.asr_gate.limit == 1
+
+
+def test_factory_rejects_public_asr_verifier_endpoint(tmp_path):
+    with pytest.raises(HTTPException) as error:
+        build_orchestrator(
+            Settings(
+                workspace_dir=tmp_path,
+                asr_verifier_enabled=True,
+                asr_verifier_endpoint="https://example.com",
+            ),
+            model_source="network",
+            model_endpoint="http://127.0.0.1:8004",
+        )
 
     assert error.value.status_code == 422

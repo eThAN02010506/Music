@@ -7,6 +7,7 @@ from typing import TypeAlias
 from music_insight.adapters.base import (
     LyricsRetryAdapter,
     UnifiedAudioAdapter,
+    VerifiedLyricsSynthesisAdapter,
 )
 from music_insight.adapters.minicpm_gateway import (
     MiniCpmGatewayAdapter,
@@ -21,9 +22,11 @@ from music_insight.adapters.model_capabilities import (
 from music_insight.adapters.openai_chat_audio import OpenAIChatAudioAdapter
 from music_insight.schemas import (
     AudioAsset,
+    AudioSceneResult,
     DspResult,
     LyricsSegment,
     UnifiedAudioResult,
+    VerifiedLyricsSynthesisResult,
 )
 from music_insight.teaching.models import (
     MapGenerationContext,
@@ -160,6 +163,21 @@ class NetworkOmniAdapter(UnifiedAudioAdapter):
             audio_bytes,
             duration_s,
             language_hint,
+        )
+
+    async def resynthesize_verified_lyrics(
+        self,
+        lyrics: list[LyricsSegment],
+        scene: AudioSceneResult,
+        dsp: DspResult,
+    ) -> VerifiedLyricsSynthesisResult:
+        adapter = await self._resolve()
+        if not isinstance(adapter, VerifiedLyricsSynthesisAdapter):
+            raise RuntimeError("当前模型协议不支持已验证歌词重新综合。")
+        return await adapter.resynthesize_verified_lyrics(
+            lyrics,
+            scene,
+            dsp,
         )
 
     async def build_understanding_map(

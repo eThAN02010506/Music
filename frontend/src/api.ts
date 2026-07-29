@@ -11,6 +11,7 @@ import type {
   ModelProbeResult,
   RuntimeConfig,
   SingingAttempt,
+  SingingAttemptCursor,
   SingingScore,
   ListenerProfile,
   ListenerLevel,
@@ -107,10 +108,29 @@ export const api = {
     ),
   logout: () =>
     request<void>("/auth/logout", { method: "POST" }),
-  leaderboard: () =>
-    request<Leaderboard>("/leaderboard"),
-  singingAttempts: () =>
-    request<SingingAttempt[]>("/singing/attempts"),
+  leaderboard: (signal?: AbortSignal) =>
+    request<Leaderboard>("/leaderboard", undefined, { signal }),
+  singingAttempts: (
+    limit = 50,
+    cursor: SingingAttemptCursor | null = null,
+    signal?: AbortSignal,
+  ) => {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (cursor) {
+      query.set("before_created_at", cursor.created_at);
+      query.set("before_id", cursor.id);
+    }
+    return request<SingingAttempt[]>(
+      `/singing/attempts?${query}`,
+      undefined,
+      { signal },
+    );
+  },
+  deleteSingingAttempt: (id: string) =>
+    request<void>(
+      `/singing/attempts/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
   probeModel: (endpoint: string, signal?: AbortSignal) =>
     request<ModelProbeResult>("/models/probe", {
       method: "POST",

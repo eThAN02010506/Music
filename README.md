@@ -11,7 +11,8 @@ Music Insight 是一个本地优先、证据驱动的音乐理解与演唱练习
 - 结构化“音乐理解地图”：从听觉事实到表达解释、段落作用与复听任务；
 - 边听边问、当前 15 秒解释、波形框选、A/B 片段比较和同步歌词；
 - 多账号隔离的历史、歌曲级多对话、结果对比、歌词校对与版本回溯；
-- 参考音频与个人演唱的本地 DSP 评分、服务端留存和娱乐排行榜；
+- 参考音频与个人演唱的本地 DSP 评分、个人成绩历史和娱乐排行榜；
+- 可选的独立 ASR 歌词二次验证，统一模型失败时仍可明确降级；
 - OpenAI `input_audio`、MiniCPM-o Comni 和本地 GGUF Provider；
 - 内存任务模式，以及可选的 Redis/Celery 跨进程分析 Worker。
 
@@ -73,10 +74,13 @@ pnpm dev
 
 - Qwen3-Omni 音频理解：`http://192.168.1.97:8004`
 - MiniCPM-o 4.5 Comni Gateway：`http://192.168.1.97:8005`
+- 可选 CrispASR/MiMo 歌词验证（`crisp_asr` 方言）：
+  `http://192.168.1.97:8003`
 - 本地 Qwen2.5-Omni-3B Q8 GGUF：放入权重后默认从 `src/model/` 查找
 
-`8004` 与 `8005` 是当前局域网示例地址；换一台机器部署时应通过页面或
-`MUSIC_INSIGHT_OMNI_ENDPOINT` 改成实际地址。导赏地图和后续对话会恢复该
+`8003`、`8004` 与 `8005` 是当前局域网示例地址。统一模型可通过页面或
+`MUSIC_INSIGHT_OMNI_ENDPOINT` 更换；独立歌词验证器通过
+`MUSIC_INSIGHT_ASR_VERIFIER_ENDPOINT` 配置。导赏地图和后续对话会恢复该
 歌曲分析时保存的 Provider，不会在聊天请求中接受一个新的任意模型 URL。
 模型权重不会随 Git 仓库分发，因此全新 clone 在未配置网络 Provider 或自行
 放入 GGUF 前，只能稳定复现界面、账户、DSP 和保守降级路径。
@@ -93,7 +97,8 @@ pnpm dev
 5. 生成教学式导赏，点击地图时间范围复听，或使用“解释当前 15 秒”直接提问。
    要比较两段时，先框选片段并分别“设为 A”“设为 B”；“连续播放 A→B”
    用于听辨，再选择“比较 A/B”并提交问题。
-6. 上传或录制个人演唱，查看音准、节奏、完整度、稳定性和对齐误差。
+6. 上传或录制个人演唱，查看音准、节奏、完整度、稳定性和对齐误差；之后可
+   从右上角“演唱记录”分页查看或删除自己的成绩。
 
 ## 架构概览
 
@@ -109,6 +114,7 @@ flowchart LR
     MEM --> PROVIDER["统一 Provider 适配层"]
     REDIS --> PROVIDER
     PROVIDER --> MODEL["OpenAI 音频 / Comni / 本地 GGUF"]
+    PROVIDER -.->|"可选歌词校验"| ASR["OpenAI-compatible ASR<br/>CrispASR / Whisper"]
 ```
 
 ### 分析流水线
@@ -124,7 +130,15 @@ flowchart LR
 4. 模型每块同时提取歌词、乐器/声源、声音事件、人声情绪和局部描述。
 5. 时间戳转换成整首音乐坐标，并裁剪或丢弃越界事件。
 6. 所有分块完成后，再由同一个模型根据分块证据和 DSP 生成最终报告。
-7. Fusion 合并观察、计算、推断和解释证据，并执行歌词语言质量门。
+7. 启用独立 ASR 时，将同一份标准 WAV 提交到转写接口。只有通过语言、片段
+   有效率、时间覆盖与置信度质量门的带时间戳结果才可替换统一模型歌词；
+   缺失置信度时仅在中英文正规化文本与主歌词高度一致后记录交叉印证，不改写
+   主歌词。空转写默认视为证据不足，只有显式且不低于 `0.8` 的无人声证据才
+   删除主模型歌词。网络、超时、协议或质量门失败均保留主歌词并标记降级。
+8. 歌词确实被替换或删除后，同一个统一 Provider 会基于新歌词、既有声景和
+   DSP 重新综合主题与意境；协议不支持或重综合失败时，系统会移除旧歌词支撑
+   的结论并写入一致性警告，不返回“新歌词配旧解释”的报告。
+9. Fusion 合并观察、计算、推断和解释证据。
 
 某个音频分块失败不会丢失其他分块；若统一模型整体不可用，仍返回本地 DSP 结果并在 `warnings` 中说明降级。
 
@@ -141,6 +155,11 @@ flowchart LR
 - 歌词缺失时执行一次定向重听；仍无法确认则保守留空。
 - 每个分块会检查歌词文字密度、明显重叠、近邻重复和过短时间段；异常时只
   重听对应分块，仍不可靠则仅剔除异常行，并在结果证据中保留处理原因。
+- 可选 ASR 验证器使用显式 `openai_whisper` 或 `crisp_asr` 方言。前者要求
+  `model`、`verbose_json` 与 segment timestamp；Crisp 的非标准 `vad` 字段
+  默认不发送。成功和错误响应均流式执行 10 MiB 硬限制，上游错误正文和 API
+  key 不会进入证据。解析后还会检查原始/有效片段比例、时间越界与覆盖、重叠、
+  文字密度、短时及全局重复；`avg_logprob=0` 等占位值不会被包装成高置信度。
 - 上传在 multipart 解析前即按 `Content-Length` 和实际接收字节执行硬限制；
   128 MB 单文件额度、两文件对比额度与加权并发接收上限相互独立。写入后还会
   验证音频容器和 20 分钟时长，解码阶段再次限制，失败、取消或超限文件不保留。
@@ -178,7 +197,8 @@ flowchart LR
 不代表配置网络 Provider 后音频绝不离开本机：
 
 - 网络 Provider 会接收标准化后的音频分块，以及综合/导赏所需的歌词和结构化
-  证据提示；选择本地 GGUF 才能让这些模型请求留在后端本机。
+  证据提示；启用独立 ASR 后，该服务还会接收整份标准化 WAV。选择本地 GGUF
+  且不启用网络 ASR，才能让这些模型请求全部留在后端本机。
 - `.music_insight/` 中的 SQLite、上传音频、派生缓存和诊断信息没有应用层
   静态加密。应依赖受控主机权限和磁盘加密，不要把工作区放在公开共享目录。
 - 历史删除会删除当前记录和受管原始音频，派生缓存由安全 GC 延迟回收；但
@@ -203,8 +223,11 @@ flowchart LR
   16 kHz、单声道、16-bit PCM WAV。
 - Qwen Omni 生成的歌词属于模型推断，不应在缺少置信度或独立 ASR 验证时
   视为准确转写。长音频尤其可能出现跨分块重复、补写或与实际人声不一致。
-- 生产级歌词链路建议由专用 ASR 负责转写，Qwen Omni 只分析乐器、声景、
-  情绪与主题；ASR 未确认人声时歌词应保持为空。当前版本尚未接入这层验证。
+- 当前可选用专用 OpenAI/Whisper 风格 ASR 复核歌词，让 Qwen Omni 继续分析
+  乐器、声景、情绪与主题。默认关闭以避免把额外模型服务变成硬依赖；设置
+  `MUSIC_INSIGHT_ASR_VERIFIER_ENABLED=true` 后启用。无置信的 Crisp 结果
+  只能交叉印证，不能覆盖冲突歌词；专用 ASR 仍可能受伴奏、人声混响和语言
+  影响，真实曲库上线前应校准质量门。
 - BPM 与调性会显示本地 DSP 置信度。低置信度结果仅供参考，不应当作确定结论。
 - BPM 估计会检查常见的半速/双速歧义。当高 BPM 与其半速候选具有近似
   tempogram 支持时，界面优先显示更接近人类拍点感知的半速值，并保留原始
@@ -278,9 +301,9 @@ Redis/Celery 横向扩展，但若要同时运行多个 API 进程或多台导�
 
 ## 历史、缓存与对比
 
-- 首次打开正式界面需要创建本地账号。每个账号只能看到自己的分析、缓存音频
-  和歌曲对话；评分记录也按账号保存，但前端目前只展示本次评分和聚合排行榜，
-  尚未提供个人尝试历史列表。退出或切换账号时前端会卸载当前工作区并清空
+- 首次打开正式界面需要创建本地账号。每个账号只能看到自己的分析、缓存音频、
+  歌曲对话和个人演唱记录；演唱记录支持稳定游标分页和删除，越权或不存在的
+  ID 不会泄漏其他账号的数据。退出或切换账号时前端会卸载当前工作区并清空
   内存状态，其他浏览器标签页也会立即重新校验账号，避免混用两个用户的数据。
 - 从旧版本升级时，在运行服务的本机创建的第一个账号会自动认领原有无归属
   历史。也可登录后在本机调用 `POST /auth/claim-legacy` 进行一次性认领；
@@ -312,6 +335,8 @@ Redis/Celery 横向扩展，但若要同时运行多个 API 进程或多台导�
 - 每次服务端评分都会保存到当前账号。排行榜每个账号只取历史最高综合分，并
   展示四项分数和尝试次数。由于不同用户可以选择不同参考音频，且独立模式可
   上传相同文件，当前总榜明确属于“娱乐最高分榜”，不能视为同曲竞技成绩。
+  “演唱记录”会显示当前账号每次评分的来源、文件名与分项成绩；删除最高分后，
+  排行榜会自动以该账号剩余的最好成绩重新计算。
 - 勾选两个已完成项目后可并排比较 BPM、调性、歌词数量、乐器、主题、直接
   情绪、推断氛围和摘要。
 
@@ -424,6 +449,7 @@ POST /history/{id}/conversations/{conversation_id}/messages
 POST /history/{id}/singing/score
 POST /singing/compare
 GET  /singing/attempts
+DELETE /singing/attempts/{attempt_id}
 GET  /leaderboard
 DELETE /history/{id}
 GET  /debug/state
@@ -477,6 +503,18 @@ export MUSIC_INSIGHT_OMNI_MODELS_PATH=/v1/models
 export MUSIC_INSIGHT_OMNI_CHUNK_SECONDS=30
 export MUSIC_INSIGHT_OMNI_CHUNK_OVERLAP_SECONDS=1.5
 export MUSIC_INSIGHT_OMNI_MAX_CONCURRENCY=1
+# 可选专用歌词验证；默认关闭
+export MUSIC_INSIGHT_ASR_VERIFIER_ENABLED=false
+export MUSIC_INSIGHT_ASR_VERIFIER_ENDPOINT=http://192.168.1.97:8003
+export MUSIC_INSIGHT_ASR_VERIFIER_TRANSCRIPTIONS_PATH=/v1/audio/transcriptions
+export MUSIC_INSIGHT_ASR_VERIFIER_DIALECT=crisp_asr
+# openai_whisper 方言必须提供 model；crisp_asr 可留空
+# export MUSIC_INSIGHT_ASR_VERIFIER_MODEL=whisper-1
+# export MUSIC_INSIGHT_ASR_VERIFIER_API_KEY=仅通过运行环境注入
+export MUSIC_INSIGHT_ASR_VERIFIER_TIMEOUT_SECONDS=600
+# 仅 crisp_asr 支持；默认 false，不发送非标准 vad 字段
+export MUSIC_INSIGHT_ASR_VERIFIER_VAD=false
+export MUSIC_INSIGHT_ASR_VERIFIER_MAX_CONCURRENCY=1
 export MUSIC_INSIGHT_COMNI_CHUNK_SECONDS=15
 export MUSIC_INSIGHT_COMNI_OPEN_TIMEOUT_SECONDS=10
 export MUSIC_INSIGHT_COMNI_FIRST_EVENT_TIMEOUT_SECONDS=180
@@ -505,7 +543,8 @@ export MUSIC_INSIGHT_WEB_ORIGINS=http://192.168.1.16:5174
 前端提交的网络模型地址仅允许 `localhost`、回环地址、链路本地地址或私有
 局域网 IP，且不能携带用户凭据、query 或 fragment；本地 GGUF 路径必须位于
 `MUSIC_INSIGHT_LOCAL_MODEL_ROOT` 之下。不要把任意公网 URL 或文件系统路径
-暴露给该服务。
+暴露给该服务。ASR 验证器地址遵守相同的私有网络限制；API key 应只通过运行
+环境或密钥管理服务注入，不要写入仓库。
 
 未设置 `VITE_API_BASE_URL` 时，前端请求同源 `/api`：开发服务器会将它代理
 到 `127.0.0.1:8000`，生产反向代理则必须自行把 `/api/*` 转发到 FastAPI 并
@@ -532,6 +571,12 @@ export MUSIC_INSIGHT_WEB_ORIGINS=http://192.168.1.16:5174
 - **结果只有 BPM、调性或能量，没有歌词和情绪**：这代表统一模型失败后进入
   DSP 降级，不是页面丢字段。到 `8000` Debug Console 展开任务，查看具体
   分块错误、Provider 探测和证据警告。
+- **开启 ASR 后歌词变为空**：先在证据中区分
+  `asr.verifier.verified_silence`、`asr.verifier.inconclusive` 与
+  `asr.verifier.unavailable`。只有第一种表示验证器提供了不低于 `0.8` 的
+  明确无人声证据并移除了主歌词；普通空响应属于 `inconclusive`，服务失败
+  属于 `unavailable`，两者都会保留主歌词。伴奏较重导致假阴性时可暂时关闭
+  验证器或关闭 Crisp VAD，并保留人工校对流程。
 - **导赏提示正在生成或需要更新**：相同歌曲和证据版本只允许一个生成者；
   按 `Retry-After` 稍后重试。歌词或基础结果修改后，使用“按最新证据重建”。
 - **本地权重不可用**：确认 `llama-server` 位于 `PATH`，主 GGUF 与
@@ -555,6 +600,8 @@ curl --fail http://127.0.0.1:8000/health
 TypeScript 检查并生成 `frontend/dist/`；FastAPI 不直接托管该目录，生产环境
 应由静态服务器或反向代理提供前端文件。真实模型 E2E 还取决于所配置 Provider，
 发布前应另外用一段已知歌词和段落的短音频验证模型能力与证据时间轴。
+若启用独立 ASR，还应分别验证一段有人声和一段静音/纯器乐样例，确认“带
+明确无人声证据”“无证据空转写”和“服务不可用”会走三种不同的证据状态。
 
 ## 目录
 
@@ -562,7 +609,7 @@ TypeScript 检查并生成 `frontend/dist/`；FastAPI 不直接托管该目录�
 frontend/        # React + TypeScript + Vite；按 features 与 hooks 分层
 src/model/       # 本地 GGUF 主模型与音频投影
 src/music_insight/
-  adapters/      # Provider 注册、能力探测、协议传输、结构化工作流与本地 DSP
+  adapters/      # Provider/ASR 适配、能力探测、协议传输、结构化工作流与 DSP
   api/
     routers/     # 认证、任务、历史、导赏、评分、Debug 与系统 HTTP 边界
     services/    # 分析、导赏、歌词重听、评分、波形与上传用例
@@ -593,6 +640,14 @@ src/music_insight/
   说明前端测试所用的原生 TypeScript 去类型能力及对应 Node 版本。
 - [FastAPI：Bigger Applications](https://fastapi.tiangolo.com/tutorial/bigger-applications/)
   说明通过 `APIRouter` 拆分大型应用，导赏 API 因此没有继续堆入 `app.py`。
+- [Starlette TestClient](https://www.starlette.io/testclient/)
+  说明当前测试客户端以 `httpx2` 为后端；测试将相关弃用警告提升为错误。
+- [OpenAI Audio Transcriptions API](https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create)
+  说明标准转写请求的 `model`、`response_format` 与
+  `timestamp_granularities` 契约；非标准 Crisp 字段通过显式方言隔离。
+- [WhisperX 论文](https://arxiv.org/abs/2303.00747)
+  说明长音频滑窗转写可能出现漂移、重复和幻觉，并用 VAD 与对齐改进时间戳；
+  本项目因此要求二次 ASR 返回带时间片段的证据并再次执行质量门。
 - [Pydantic Configuration](https://docs.pydantic.dev/latest/api/config/)
   说明 `extra="forbid"` 会拒绝模型或客户端提交的未知字段。
 - [SQLite Transactions](https://www.sqlite.org/lang_transaction.html)

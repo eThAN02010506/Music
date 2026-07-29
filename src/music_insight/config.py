@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -55,6 +55,15 @@ class Settings(BaseSettings):
     omni_chunk_seconds: float = 30.0
     omni_chunk_overlap_seconds: float = Field(default=1.5, ge=0, le=10)
     omni_max_concurrency: int = Field(default=1, ge=1, le=8)
+    asr_verifier_enabled: bool = False
+    asr_verifier_endpoint: str = "http://192.168.1.97:8003"
+    asr_verifier_transcriptions_path: str = "/v1/audio/transcriptions"
+    asr_verifier_dialect: Literal["openai_whisper", "crisp_asr"] = "crisp_asr"
+    asr_verifier_model: str | None = None
+    asr_verifier_api_key: SecretStr | None = None
+    asr_verifier_timeout_seconds: float = Field(default=600.0, ge=10, le=3600)
+    asr_verifier_vad: bool = False
+    asr_verifier_max_concurrency: int = Field(default=1, ge=1, le=8)
     comni_chunk_seconds: float = Field(default=15.0, ge=5, le=60)
     comni_open_timeout_seconds: float = Field(default=10.0, ge=1, le=60)
     comni_first_event_timeout_seconds: float = Field(
@@ -83,8 +92,37 @@ class Settings(BaseSettings):
             )
         return value
 
+    @field_validator("asr_verifier_transcriptions_path")
+    @classmethod
+    def validate_asr_transcriptions_path(cls, value: str) -> str:
+        path = value.strip()
+        if not path:
+            raise ValueError("asr_verifier_transcriptions_path cannot be empty")
+        if not path.startswith("/"):
+            path = f"/{path}"
+        if path.startswith("//") or "?" in path or "#" in path:
+            raise ValueError(
+                "asr_verifier_transcriptions_path must be an API path"
+            )
+        return path
+
     @model_validator(mode="after")
     def validate_distributed_workspace(self) -> "Settings":
+        if (
+            self.asr_verifier_enabled
+            and self.asr_verifier_dialect == "openai_whisper"
+            and not (self.asr_verifier_model or "").strip()
+        ):
+            raise ValueError(
+                "asr_verifier_model is required for openai_whisper dialect"
+            )
+        if (
+            self.asr_verifier_dialect != "crisp_asr"
+            and self.asr_verifier_vad
+        ):
+            raise ValueError(
+                "asr_verifier_vad is available only for crisp_asr dialect"
+            )
         if self.job_backend == "redis" and (
             self.shared_audio_dir is None
             or not self.shared_audio_dir.is_absolute()

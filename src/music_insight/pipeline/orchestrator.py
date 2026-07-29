@@ -5,14 +5,21 @@ from contextlib import AbstractAsyncContextManager
 import inspect
 import re
 
-from music_insight.adapters.base import DspAdapter, UnifiedAudioAdapter
+from music_insight.adapters.base import (
+    AsrVerifier,
+    DspAdapter,
+    UnifiedAudioAdapter,
+    VerifiedLyricsSynthesisAdapter,
+)
 from music_insight.adapters.local_analysis import LocalEvidenceAnalysisAdapter
+from music_insight.pipeline.asr_verification import AsrVerificationFusion
 from music_insight.pipeline.fusion import FusionEngine
 from music_insight.pipeline.preprocess import Preprocessor
 from music_insight.schemas import (
     AnalysisResult,
     AsrResult,
     AudioAsset,
+    AudioSceneResult,
     DspResult,
     Evidence,
     EvidenceType,
@@ -29,6 +36,9 @@ class AnalysisOrchestrator:
         fusion: FusionEngine | None = None,
         dsp_gate: AbstractAsyncContextManager[None] | None = None,
         model_gate: AbstractAsyncContextManager[None] | None = None,
+        asr_verifier: AsrVerifier | None = None,
+        asr_verification_fusion: AsrVerificationFusion | None = None,
+        asr_gate: AbstractAsyncContextManager[None] | None = None,
     ) -> None:
         self.unified = unified
         self.dsp = dsp
@@ -36,6 +46,11 @@ class AnalysisOrchestrator:
         self.fusion = fusion or FusionEngine()
         self.dsp_gate = dsp_gate
         self.model_gate = model_gate
+        self.asr_verifier = asr_verifier
+        self.asr_verification_fusion = (
+            asr_verification_fusion or AsrVerificationFusion()
+        )
+        self.asr_gate = asr_gate
 
     async def analyze(
         self,
@@ -116,7 +131,89 @@ class AnalysisOrchestrator:
             asr_result, asset.language_hint, "omni"
         )
 
-        await self._notify(progress, "fusion", 0.94, "正在整理模型与 DSP 证据")
+        if self.asr_verifier is not None:
+            await self._notify(
+                progress,
+                "asr_verification",
+                0.93,
+                "正在使用专用 ASR 二次校验歌词时间轴",
+            )
+            try:
+                if prepared.scene is None:
+                    raise RuntimeError("标准化音频不可用，无法执行歌词二次验证。")
+                if self.asr_gate is None:
+                    verification = await self.asr_verifier.verify(prepared.scene)
+                else:
+                    async with self.asr_gate:
+                        verification = await self.asr_verifier.verify(
+                            prepared.scene
+                        )
+                decision = self.asr_verification_fusion.evaluate(
+                    asr_result,
+                    verification,
+                )
+            except Exception as exc:
+                asr_result = self.asr_verification_fusion.mark_unavailable(
+                    asr_result,
+                    source=self.asr_verifier.source,
+                    error=exc,
+                )
+            else:
+                refresh_report = (
+                    decision.status == "verified_silence"
+                    and self._lyrics_differ(
+                        decision.primary,
+                        decision.result,
+                    )
+                )
+                if decision.candidate_applied:
+                    language_checked = self._apply_language_gate(
+                        decision.result,
+                        asset.language_hint,
+                        "asr.verifier",
+                    )
+                    if decision.result.lyrics and not language_checked.lyrics:
+                        asr_result = (
+                            self.asr_verification_fusion
+                            .reject_candidate_language(
+                                decision,
+                                language_checked,
+                            )
+                        )
+                        refresh_report = False
+                    else:
+                        asr_result = (
+                            self.asr_verification_fusion.finalize_candidate(
+                                decision
+                            )
+                        )
+                        refresh_report = (
+                            decision.replaces_primary
+                            and self._lyrics_differ(
+                                decision.primary,
+                                asr_result,
+                            )
+                        )
+                else:
+                    asr_result = decision.result
+
+                if refresh_report:
+                    await self._notify(
+                        progress,
+                        "verified_lyrics_synthesis",
+                        0.945,
+                        "正在依据已验证歌词更新主题与综合解释",
+                    )
+                    scene_result, literary_result = (
+                        await self._refresh_lyrics_dependent_report(
+                            lyrics=asr_result,
+                            scene=scene_result,
+                            literary=literary_result,
+                            dsp=dsp_result,
+                        )
+                    )
+
+        await self._notify(progress, "fusion", 0.97, "正在整理模型与 DSP 证据")
         result = self.fusion.merge(
             asr=asr_result,
             scene=scene_result,
@@ -125,6 +222,127 @@ class AnalysisOrchestrator:
         )
         await self._notify(progress, "finalizing", 0.99, "正在完成报告")
         return result
+
+    async def _refresh_lyrics_dependent_report(
+        self,
+        *,
+        lyrics: AsrResult,
+        scene: AudioSceneResult,
+        literary: LiteraryResult,
+        dsp: DspResult,
+    ) -> tuple[AudioSceneResult, LiteraryResult]:
+        try:
+            if not isinstance(self.unified, VerifiedLyricsSynthesisAdapter):
+                raise RuntimeError(
+                    "当前统一模型不支持已验证歌词重新综合。"
+                )
+            if self.model_gate is None:
+                refreshed = await self.unified.resynthesize_verified_lyrics(
+                    lyrics.lyrics,
+                    scene,
+                    dsp,
+                )
+            else:
+                async with self.model_gate:
+                    refreshed = (
+                        await self.unified.resynthesize_verified_lyrics(
+                            lyrics.lyrics,
+                            scene,
+                            dsp,
+                        )
+                    )
+        except Exception as exc:
+            return self._sanitize_lyrics_dependent_report(
+                scene=scene,
+                source=getattr(self.unified, "source", "统一音频模型"),
+                error=exc,
+            )
+
+        retained_scene_evidence = self._consistency_safe_scene_evidence(
+            scene
+        )
+        refreshed_scene = scene.model_copy(
+            update={
+                "inferred_atmosphere": refreshed.inferred_atmosphere,
+                "themes": [],
+                "narrative": None,
+                "evidence": [
+                    *retained_scene_evidence,
+                    *refreshed.evidence,
+                ],
+            }
+        )
+        return refreshed_scene, refreshed.literary
+
+    @staticmethod
+    def _sanitize_lyrics_dependent_report(
+        *,
+        scene: AudioSceneResult,
+        source: str,
+        error: BaseException,
+    ) -> tuple[AudioSceneResult, LiteraryResult]:
+        consistency = Evidence(
+            id="asr.verifier.consistency.unavailable",
+            source=source,
+            kind=EvidenceType.OBSERVED,
+            text=(
+                "歌词已由二次 ASR 更新，但统一模型未能基于新歌词重新综合；"
+                "已移除旧歌词支撑的主题、意境和综合解释。"
+            ),
+            confidence=0.0,
+            metadata={"error_type": error.__class__.__name__},
+        )
+        retained_scene_evidence = (
+            AnalysisOrchestrator._consistency_safe_scene_evidence(scene)
+        )
+        safe_scene = scene.model_copy(
+            update={
+                "inferred_atmosphere": [],
+                "themes": [],
+                "narrative": None,
+                "evidence": retained_scene_evidence,
+            }
+        )
+        safe_literary = LiteraryResult(
+            model="歌词一致性安全降级",
+            themes=[],
+            narrative=(
+                "歌词已完成二次校验。由于无法安全地基于新歌词重新综合，"
+                "原歌词相关主题结论已移除；节拍、调性、配器和声音事件仍可参考。"
+            ),
+            evidence=[consistency],
+        )
+        return safe_scene, safe_literary
+
+    @staticmethod
+    def _lyrics_differ(first: AsrResult, second: AsrResult) -> bool:
+        return [
+            item.model_dump(mode="json") for item in first.lyrics
+        ] != [
+            item.model_dump(mode="json") for item in second.lyrics
+        ]
+
+    @staticmethod
+    def _consistency_safe_scene_evidence(
+        scene: AudioSceneResult,
+    ) -> list[Evidence]:
+        lyric_sensitive_markers = (
+            ".analysis",
+            ".quality_retry",
+            ".recovery",
+        )
+        return [
+            item
+            for item in scene.evidence
+            if not item.id.startswith("omni.final.")
+            and not (
+                item.id.startswith("omni.chunk.")
+                and any(
+                    marker in item.id
+                    for marker in lyric_sensitive_markers
+                )
+            )
+        ]
 
     @staticmethod
     async def _notify(
