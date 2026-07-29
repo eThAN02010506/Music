@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
-import copy
 from contextlib import AbstractAsyncContextManager
 import io
 import json
@@ -23,7 +22,6 @@ from music_insight.adapters.model_capabilities import (
     COMNI_CHAT_PROTOCOL,
     probe_model_service,
 )
-from music_insight.adapters.openai_compat_utils import parse_json_object
 from music_insight.adapters.structured_omni import StructuredOmniAdapter
 
 
@@ -232,29 +230,6 @@ class MiniCpmGatewayAdapter(StructuredOmniAdapter):
             )
         self._resolved_model = capabilities.model or "MiniCPM-o-4.5"
         return self._resolved_model
-
-    async def _chat_json(
-        self,
-        request: dict[str, Any],
-        timeout: float,
-    ) -> dict[str, Any]:
-        content = await self._chat(request, timeout)
-        try:
-            return parse_json_object(content)
-        except ValueError:
-            retry_request = copy.deepcopy(request)
-            retry_request["max_tokens"] = min(
-                int(retry_request.get("max_tokens", 1200)),
-                1200,
-            )
-            messages = retry_request.get("messages") or []
-            if messages and isinstance(messages[0].get("content"), str):
-                messages[0]["content"] += (
-                    " 上一次输出不是可解析 JSON。请缩短结果，"
-                    "严格检查逗号、引号和括号，只输出一个 JSON 对象。"
-                )
-            repaired = await self._chat(retry_request, timeout)
-            return parse_json_object(repaired)
 
     async def _chat(self, request: dict[str, Any], timeout: float) -> str:
         payload = openai_request_to_comni(request)

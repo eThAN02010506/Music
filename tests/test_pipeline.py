@@ -189,7 +189,10 @@ class FakeJsonRetryOmni(QwenOmniUnifiedAdapter):
         self.requests.append(request)
         if len(self.requests) == 1:
             return '{"lyrics": [{"text": "broken"} "themes": []}'
-        return '{"lyrics": [], "themes": []}'
+        return (
+            '{"lyrics": [], "instruments": [], "sound_events": [], '
+            '"emotion_timeline": [], "themes": [], "narrative": ""}'
+        )
 
 
 class FakeDspAdapter:
@@ -846,7 +849,14 @@ def test_chat_json_retries_malformed_success_response():
 
     parsed = asyncio.run(adapter._chat_json(request, timeout=1.0))
 
-    assert parsed == {"lyrics": [], "themes": []}
+    assert parsed == {
+        "lyrics": [],
+        "instruments": [],
+        "sound_events": [],
+        "emotion_timeline": [],
+        "themes": [],
+        "narrative": "",
+    }
     assert len(adapter.requests) == 2
     assert adapter.requests[1]["response_format"] == {"type": "json_object"}
     assert adapter.requests[1]["max_tokens"] == 1200

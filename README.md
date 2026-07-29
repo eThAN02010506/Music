@@ -32,6 +32,9 @@
 - OpenAI 兼容 Provider 优先使用 JSON Schema，服务不支持时回退到 JSON
   object；Comni Provider 使用严格提示和一次有界 JSON 修复，不伪装成
   OpenAI structured output。
+- 无论服务端是否原生支持 structured output，客户端都会用同一份 JSON
+  Schema 再校验一次。语法正确但字段错误的响应只重试一次，连续失败会记录为
+  模型错误，不会被误标为成功分析或继续触发无意义的歌词重听。
 - 本地修复常见的单引号 JSON 和未加引号字段名。
 - 拒绝提示词占位值、裁剪越界时间戳，并对歌词、声源和事件去重。
 - 歌词缺失时执行一次定向重听；仍无法确认则保守留空。
@@ -328,8 +331,30 @@ src/music_insight/
   ui/            # Streamlit 调试台
 ```
 
-供应商无关的结构化输出协议、请求构造、解析、音频切块和工作流位于
-`adapters/structured_omni_*.py`。`network_omni.py` 根据只读能力探测结果
-从 Provider 注册表选择传输；`qwen_omni_unified.py` 负责 OpenAI HTTP，
+供应商无关的结构化输出协议、请求构造、JSON Schema 校验、解析、音频切块和
+工作流位于 `adapters/structured_omni_*.py` 与
+`adapters/structured_output.py`。`network_omni.py` 根据只读能力探测结果
+从 Provider 注册表选择传输；`openai_chat_audio.py` 负责通用 OpenAI
+音频 HTTP，`qwen_omni_unified.py` 仅保留 Qwen 兼容包装，
 `minicpm_gateway.py` 负责 Comni WebSocket。网络调用集中在后端适配器，
 前端 HTTP 调用集中在 `frontend/src/api.ts`。
+
+架构与协议核对以官方资料为准：
+
+- [MiniCPM-o Comni Chat API](https://github.com/OpenBMB/MiniCPM-o-Demo/blob/Comni/docs/en/api/chat.md)
+  定义 `/ws/chat` 请求、Float32 PCM 音频和事件流。
+- [websockets asyncio client](https://websockets.readthedocs.io/en/stable/reference/asyncio/client.html)
+  定义连接、超时、代理、消息大小和队列边界。
+- [vLLM Multimodal Inputs](https://docs.vllm.ai/en/stable/features/multimodal_inputs/)
+  说明其 OpenAI-compatible Chat Completions 支持 `input_audio`。
+- [vLLM-Omni Qwen2.5-Omni](https://docs.vllm.ai/projects/vllm-omni/en/latest/user_guide/examples/online_serving/qwen2_5_omni/)
+  说明未指定输出模态时可能同时生成音频；接入该方言时应显式请求纯文本。
+- [Ollama OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility)
+  明确兼容范围是 OpenAI API 的一部分，不能仅凭 `/v1/models` 假设音频能力。
+- [Gemini OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai#audio-understanding)
+  支持 `input_audio`，但鉴权和兼容范围仍应由独立 Provider 配置。
+- [Anthropic OpenAI SDK compatibility](https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk)
+  会忽略 `response_format` 并移除音频输入，因此只能接在 ASR 后做文本推理，
+  不能注册成直接音频 Provider。
+- [jsonschema validation](https://python-jsonschema.readthedocs.io/en/stable/)
+  用于客户端复验服务端返回的结构化 JSON。

@@ -16,7 +16,7 @@ from music_insight.adapters.network_omni import (
     NetworkOmniAdapter,
     NetworkOmniProviderRegistry,
 )
-from music_insight.adapters.qwen_omni_unified import QwenOmniUnifiedAdapter
+from music_insight.adapters.openai_chat_audio import OpenAIChatAudioAdapter
 
 
 class _FakeAdapter(UnifiedAudioAdapter):
@@ -102,7 +102,7 @@ def test_provider_registry_rejects_duplicate_and_unknown_protocols() -> None:
         (
             "http://127.0.0.1:39117",
             OPENAI_CHAT_PROTOCOL,
-            QwenOmniUnifiedAdapter,
+            OpenAIChatAudioAdapter,
         ),
         (
             "http://127.0.0.1:39118",
@@ -114,7 +114,7 @@ def test_provider_registry_rejects_duplicate_and_unknown_protocols() -> None:
         (
             "http://127.0.0.1:8005",
             OPENAI_CHAT_PROTOCOL,
-            QwenOmniUnifiedAdapter,
+            OpenAIChatAudioAdapter,
         ),
         # Conversely, a Comni gateway remains Comni on a traditionally
         # Qwen-associated port.

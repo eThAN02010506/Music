@@ -18,7 +18,7 @@ from music_insight.adapters.model_capabilities import (
     ModelServiceCapabilities,
     probe_model_service,
 )
-from music_insight.adapters.qwen_omni_unified import QwenOmniUnifiedAdapter
+from music_insight.adapters.openai_chat_audio import OpenAIChatAudioAdapter
 from music_insight.schemas import (
     AudioAsset,
     DspResult,
@@ -96,7 +96,7 @@ class NetworkOmniAdapter(UnifiedAudioAdapter):
             registry = NetworkOmniProviderRegistry()
             registry.register(
                 OPENAI_CHAT_PROTOCOL,
-                lambda capabilities: QwenOmniUnifiedAdapter(
+                lambda capabilities: OpenAIChatAudioAdapter(
                     endpoint=self.endpoint,
                     completions_path=completions_path,
                     models_path=models_path,

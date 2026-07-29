@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
 import inspect
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from music_insight.adapters.base import UnifiedAudioAdapter
+from music_insight.adapters.openai_compat_utils import parse_json_object
 from music_insight.adapters.structured_omni_audio import (
     count_wav_chunks,
     iter_wav_chunks,
@@ -40,6 +42,11 @@ from music_insight.adapters.structured_omni_schemas import (
     chunk_response_format,
     final_response_format,
     recovery_response_format,
+)
+from music_insight.adapters.structured_output import (
+    StructuredOutputError,
+    schema_retry_request,
+    validate_structured_output,
 )
 from music_insight.adapters.structured_omni_workflow import (
     StructuredOmniAnalysisWorkflow,
@@ -166,12 +173,43 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
     async def _model(self) -> str:
         raise NotImplementedError
 
-    @abstractmethod
     async def _chat_json(
         self,
         request: dict[str, Any],
         timeout: float,
     ) -> dict[str, Any]:
+        async with asyncio.timeout(timeout):
+            content = await self._chat(request, timeout)
+            try:
+                payload = parse_json_object(content)
+                validate_structured_output(payload, request)
+                return payload
+            except StructuredOutputError as first_error:
+                retry = schema_retry_request(
+                    request,
+                    first_error,
+                    json_object_fallback=False,
+                )
+            except ValueError as first_error:
+                retry = schema_retry_request(
+                    request,
+                    first_error,
+                    json_object_fallback=True,
+                )
+
+            retry_content = await self._chat(retry, timeout)
+            try:
+                repaired = parse_json_object(retry_content)
+                validate_structured_output(repaired, request)
+            except (StructuredOutputError, ValueError) as second_error:
+                raise StructuredOutputError(
+                    "模型连续两次未返回符合结构契约的 JSON；"
+                    f"第二次错误：{str(second_error)[:500]}"
+                ) from second_error
+            return repaired
+
+    @abstractmethod
+    async def _chat(self, request: dict[str, Any], timeout: float) -> str:
         raise NotImplementedError
 
     async def _analyze_chunk(

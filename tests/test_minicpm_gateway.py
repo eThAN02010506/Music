@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from music_insight.adapters.minicpm_gateway import (
+    MiniCpmGatewayAdapter,
     MiniCpmGatewayClient,
     MiniCpmGatewayError,
     MiniCpmGatewayProtocolError,
@@ -67,6 +68,22 @@ class FakeConnectFactory:
         connection = FakeConnection(self.websocket)
         self.connections.append(connection)
         return connection
+
+
+class FakeGatewayClient:
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = list(responses)
+        self.payloads: list[dict[str, Any]] = []
+
+    async def request_text(
+        self,
+        payload: dict[str, Any],
+        *,
+        timeout: float | None = None,
+    ) -> str:
+        del timeout
+        self.payloads.append(payload)
+        return self.responses.pop(0)
 
 
 def _pcm16_wav(
@@ -279,3 +296,35 @@ def test_client_converts_event_timeout_without_network_access():
 
     with pytest.raises(MiniCpmGatewayError, match="未返回下一事件"):
         asyncio.run(client.request_text({"messages": []}, timeout=5))
+
+
+def test_adapter_inherits_provider_neutral_schema_gate():
+    valid = {
+        "lyrics": [],
+        "instruments": [],
+        "sound_events": [],
+        "emotion_timeline": [],
+        "themes": [],
+        "narrative": "",
+    }
+    client = FakeGatewayClient(
+        [
+            json.dumps({"event": "I'm back"}),
+            json.dumps(valid),
+        ]
+    )
+    adapter = MiniCpmGatewayAdapter(
+        "http://model.local:8005",
+        model="MiniCPM-o-4.5",
+        client=client,
+    )
+    request = {
+        "messages": [{"role": "system", "content": "Return JSON."}],
+        "response_format": adapter._chunk_response_format(),
+    }
+
+    result = asyncio.run(adapter._chat_json(request, timeout=1))
+
+    assert result == valid
+    assert len(client.payloads) == 2
+    assert "music_chunk_analysis" in client.payloads[1]["messages"][0]["content"]
