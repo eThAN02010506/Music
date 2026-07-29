@@ -8,7 +8,6 @@ import {
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { api, API_BASE } from "../../api";
 import { announceAuthChange } from "../../authSession";
-import { SignalMark } from "../../components/SignalMark";
 import {
   ModelSettings,
   ProgressPanel,
@@ -192,6 +191,13 @@ export function AuthenticatedWorkspace({
   };
 
   const audioUrl = file ? uploadAudioUrl : storedAudioUrl;
+  const workspaceTitle = comparison.length === 2
+    ? "双曲对比"
+    : activeId
+      ? fileName || "分析详情"
+      : startMode === "analysis"
+        ? "新建音乐导赏"
+        : "演唱对比";
 
   return (
     <div className="app-shell">
@@ -210,7 +216,10 @@ export function AuthenticatedWorkspace({
       />
       <div className="app-main">
         <header className="topbar">
-          <a className="brand" href="#top"><SignalMark /><span>Music Insight</span></a>
+          <a className="workspace-context" href="#top">
+            <span>LISTENING STUDIO</span>
+            <strong>{workspaceTitle}</strong>
+          </a>
           <div className="topbar-actions">
             <div className="service-status">
               <span className={health ? "online" : "offline"} />

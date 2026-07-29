@@ -96,13 +96,13 @@ export function TeachingWorkspace({
       )}
       <TeachingOverview map={map} />
       <div className="teaching-main-grid">
-        <UnderstandingMap map={map} />
         <ListeningChat
           historyId={historyId}
           map={map}
           profile={profile}
           onLevelChange={onLevelChange}
         />
+        <UnderstandingMap map={map} />
       </div>
     </div>
   );

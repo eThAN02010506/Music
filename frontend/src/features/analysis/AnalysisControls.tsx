@@ -48,9 +48,21 @@ export function UploadPanel({
 
   return (
     <section className="upload-card panel">
-      <div className="section-kicker">NEW ANALYSIS</div>
-      <h1>听见音乐里的证据</h1>
-      <p className="lead">上传一段音频，识别歌词、乐器、声音事件与情绪，并结合本地 DSP 形成可核查的分析。</p>
+      <div className="upload-intro">
+        <div>
+          <div className="section-kicker">NEW LISTENING SESSION</div>
+          <h1>先听懂整首歌，<br />再追问每个瞬间。</h1>
+          <p className="lead">
+            上传歌曲后，从歌词、段落与声音证据出发，生成可以边听边问、
+            随时跳转复听的音乐导赏。
+          </p>
+        </div>
+        <div className="upload-capabilities" aria-label="分析流程">
+          <span><i>01</i><strong>理解全曲</strong><small>气氛、结构与情绪弧线</small></span>
+          <span><i>02</i><strong>定位证据</strong><small>歌词、乐器与声音变化</small></span>
+          <span><i>03</i><strong>带着问题复听</strong><small>时间地图与持续对话</small></span>
+        </div>
+      </div>
 
       <div
         className={`drop-zone ${dragging ? "dragging" : ""} ${file ? "has-file" : ""} ${busy ? "disabled" : ""}`}
@@ -81,7 +93,7 @@ export function UploadPanel({
           disabled={busy}
           onChange={(event) => event.target.files?.[0] && onFile(event.target.files[0])}
         />
-        <div className="upload-icon">↥</div>
+        <div className="upload-icon" aria-hidden="true">↑</div>
         {file ? (
           <>
             <strong>{file.name}</strong>
