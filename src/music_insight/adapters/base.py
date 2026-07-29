@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
+from typing import Protocol, runtime_checkable
 
 from music_insight.schemas import (
     AsrResult,
@@ -7,6 +8,8 @@ from music_insight.schemas import (
     AudioSceneResult,
     DspResult,
     LiteraryResult,
+    LyricsSegment,
+    UnifiedAudioResult,
 )
 
 
@@ -52,5 +55,19 @@ class UnifiedAudioAdapter(ABC):
         asset: AudioAsset,
         dsp: DspResult,
         progress: Callable[[str, float, str], Awaitable[None] | None] | None = None,
-    ):
+    ) -> UnifiedAudioResult:
         raise NotImplementedError
+
+
+@runtime_checkable
+class LyricsRetryAdapter(Protocol):
+    """Capability contract for adapters that can re-listen to a WAV excerpt."""
+
+    source: str
+
+    async def retry_lyrics(
+        self,
+        audio_bytes: bytes,
+        duration_s: float,
+        language_hint: str | None,
+    ) -> tuple[list[LyricsSegment], list[str]]: ...

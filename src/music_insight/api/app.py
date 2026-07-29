@@ -1,616 +1,283 @@
+from __future__ import annotations
+
 import asyncio
-from functools import lru_cache
-import json
-from pathlib import Path
-import shutil
+from contextlib import asynccontextmanager
+from datetime import timedelta
+import os
+from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import JSONResponse
+from redis.exceptions import RedisError
+from starlette.concurrency import run_in_threadpool
 
-from music_insight.adapters.dsp import BasicDspAdapter
-from music_insight.adapters.local_omni import (
-    LocalModelConfigurationError,
-    LocalOmniServer,
-    ManagedLocalOmniAdapter,
+from music_insight import __version__
+from music_insight.api.body_limit import RequestBodyLimitMiddleware
+from music_insight.api.capacity import CapacityLimitError, CapacityLimiter
+from music_insight.api.dependencies import (
+    get_account_store,
+    get_current_user,
+    get_history_store,
+    get_job_store,
+    get_orchestrator,
+    validate_private_model_endpoint,
 )
-from music_insight.adapters.qwen_omni_unified import QwenOmniUnifiedAdapter
-from music_insight.api.history import (
-    HistoryDetail,
-    HistoryLyricsRetryRequest,
-    HistoryLyricsRetryResult,
-    HistoryLyricsUpdate,
-    HistoryRename,
-    HistoryRevision,
-    HistoryStore,
-    HistorySummary,
+from music_insight.api.jobs import AnalysisJobStore
+from music_insight.api.orchestrator_factory import create_local_server
+from music_insight.api.routers import auth, debug, history, jobs as job_routes
+from music_insight.api.routers import singing, system
+from music_insight.api.services.auth import AuthRateLimiter
+from music_insight.config import get_settings
+from music_insight.distributed.jobs import (
+    DistributedJobUnavailable,
+    RedisAnalysisJobStore,
 )
-from music_insight.api.debug import DEBUG_PAGE, debug_state, diagnostic_report, task_detail
-from music_insight.api.jobs import AnalysisJobStore, JobSnapshot, JobState, snapshot_event
-from music_insight.api.model_probe import (
-    ModelProbeRequest,
-    ModelProbeResult,
-    probe_model_endpoint,
-    validate_model_endpoint,
-)
-from music_insight.config import Settings, get_settings
-from music_insight.audio import slice_wav
-from music_insight.pipeline.orchestrator import AnalysisOrchestrator
-from music_insight.pipeline.preprocess import Preprocessor
+from music_insight.distributed.reconcile import reconcile_terminal_history
 from music_insight.pipeline.resources import model_resources
-from music_insight.reporting.markdown import render_markdown_report
-from music_insight.schemas import AnalysisResult, AudioAsset
-from music_insight.singing_score import SingingScore, score_singing
-from music_insight.storage.local import LocalAudioStore, UploadTooLargeError
-
-app = FastAPI(title="Music Insight", version="0.1.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-        "http://127.0.0.1:5174",
-        "http://localhost:5174",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-jobs = AnalysisJobStore()
 
 
-@lru_cache
-def _history_store(database_path: str) -> HistoryStore:
-    return HistoryStore(Path(database_path))
+DEFAULT_WEB_ORIGINS = {
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+    "http://127.0.0.1:5174",
+    "http://localhost:5174",
+}
 
 
-def get_history_store(settings: Settings = Depends(get_settings)) -> HistoryStore:
-    return _history_store(str(settings.workspace_dir / "history.sqlite3"))
-
-
-@lru_cache
-def _local_server(root: str, endpoint: str, executable: str) -> LocalOmniServer:
-    return LocalOmniServer(root=Path(root), endpoint=endpoint, executable=executable)
-
-
-def get_orchestrator(
-    settings: Settings = Depends(get_settings),
-    *,
-    model_source: str = "network",
-    model_endpoint: str | None = None,
-    local_model_path: str | None = None,
-) -> AnalysisOrchestrator:
-    if model_source == "local":
-        if not local_model_path:
-            raise HTTPException(status_code=422, detail="Local model path is required.")
-        server = _local_server(
-            str(settings.local_model_root),
-            settings.local_omni_endpoint,
-            settings.local_llama_server,
-        )
-        try:
-            server.resolve(local_model_path)
-        except LocalModelConfigurationError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        if shutil.which(settings.local_llama_server) is None:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"未找到 {settings.local_llama_server}。请先安装支持该 Qwen Omni "
-                    "GGUF 的 llama.cpp，或填写本机 OpenAI 兼容接口地址。"
-                ),
-            )
-        unified = ManagedLocalOmniAdapter(
-            server=server,
-            model_path=local_model_path,
-            completions_path=settings.omni_completions_path,
-            models_path=settings.omni_models_path,
-            model=settings.omni_model,
-            chunk_seconds=settings.omni_chunk_seconds,
-        )
-    else:
-        try:
-            endpoint = validate_model_endpoint(
-                model_endpoint or settings.omni_endpoint
-            )
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail="Model endpoint must use http or https.",
-            ) from exc
-        unified = QwenOmniUnifiedAdapter(
-            endpoint=endpoint,
-            completions_path=settings.omni_completions_path,
-            models_path=settings.omni_models_path,
-            model=settings.omni_model,
-            chunk_seconds=settings.omni_chunk_seconds,
-        )
-    return AnalysisOrchestrator(
-        unified=unified,
-        dsp=BasicDspAdapter(),
-        preprocessor=Preprocessor(
-            workspace_dir=settings.workspace_dir,
-        ),
-        model_gate=model_resources.gate(
-            unified.endpoint, settings.omni_max_concurrency
-        ),
-    )
-
-
-@app.get("/health")
-async def health(settings: Settings = Depends(get_settings)) -> dict[str, str | bool]:
-    return {
-        "status": "ok",
-        "model_endpoint": settings.omni_endpoint,
-        "mode": "local-api",
-        "local_model_root": str(settings.local_model_root.resolve()),
-        "local_runner_available": shutil.which(settings.local_llama_server) is not None,
+def configured_web_origins() -> set[str]:
+    configured = {
+        origin.strip().rstrip("/")
+        for origin in os.getenv("MUSIC_INSIGHT_WEB_ORIGINS", "").split(",")
+        if origin.strip()
     }
+    return DEFAULT_WEB_ORIGINS | configured
 
 
-@app.post("/models/probe", response_model=ModelProbeResult)
-async def probe_model(payload: ModelProbeRequest) -> ModelProbeResult:
+ALLOWED_WEB_ORIGINS = configured_web_origins()
+
+
+@asynccontextmanager
+async def _lifespan(api: FastAPI):
+    """Recover durable state before serving and settle owned resources on exit."""
+
+    api.state.asset_gc_report = None
+    api.state.asset_gc_error = None
+    settings = get_settings()
+    history_store = await run_in_threadpool(get_history_store, settings)
+    active_job_ids: set[str] = set()
+    terminal_reconciler: asyncio.Task[None] | None = None
+    if isinstance(api.state.jobs, RedisAnalysisJobStore):
+        await api.state.jobs.initialize()
+        active_job_ids = await api.state.jobs.active_job_ids()
+        active_job_ids.update(
+            await api.state.jobs.pending_terminal_job_ids(500)
+        )
+    api.state.recovered_interrupted_jobs = await run_in_threadpool(
+        history_store.recover_interrupted_jobs,
+        active_job_ids=active_job_ids,
+    )
+    if isinstance(api.state.jobs, RedisAnalysisJobStore):
+        terminal_reconciler = asyncio.create_task(
+            reconcile_terminal_history(api.state.jobs, history_store)
+        )
+
     try:
-        return await probe_model_endpoint(payload.endpoint)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-@app.get("/", response_class=HTMLResponse)
-async def root() -> HTMLResponse:
-    return HTMLResponse(DEBUG_PAGE)
-
-
-@app.get("/api/info")
-async def api_info() -> dict[str, object]:
-    return {
-        "name": "Music Insight",
-        "status": "ok",
-        "endpoints": {
-            "health": "/health",
-            "analyze": "POST /analyze",
-            "markdown": "POST /analyze/markdown",
-            "jobs": "POST /jobs",
-            "history": "GET /history",
-            "singing_score": "POST /history/{id}/singing/score",
-            "docs": "/docs",
-        },
-        "pipeline": {
-            "unified_model": "Qwen Omni（以 /health 当前配置为准）",
-            "acoustic_metrics": "librosa (local)",
-            "strategy": "30-second audio chunks + same-model text fusion",
-        },
-    }
-
-
-@app.get("/debug/state")
-async def get_debug_state(
-    settings: Settings = Depends(get_settings),
-    history: HistoryStore = Depends(get_history_store),
-) -> dict[str, object]:
-    return debug_state(jobs, history, settings)
-
-
-@app.get("/debug/report", response_class=PlainTextResponse)
-async def get_debug_report(
-    settings: Settings = Depends(get_settings),
-    history: HistoryStore = Depends(get_history_store),
-) -> PlainTextResponse:
-    report = diagnostic_report(debug_state(jobs, history, settings))
-    return PlainTextResponse(
-        report,
-        headers={
-            "Content-Disposition": "attachment; filename=music-insight-debug.json"
-        },
-    )
-
-
-@app.get("/debug/tasks/{task_id}")
-async def get_debug_task(
-    task_id: str,
-    history: HistoryStore = Depends(get_history_store),
-) -> dict[str, object]:
-    detail = task_detail(task_id, jobs, history)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="Debug task not found.")
-    return detail
-
-
-async def _save_asset(
-    file: UploadFile,
-    language: str | None,
-    settings: Settings,
-):
-    if not file.content_type or not file.content_type.startswith("audio/"):
-        raise HTTPException(status_code=415, detail="Only audio uploads are supported.")
-    if language not in {None, "zh", "en"}:
-        raise HTTPException(status_code=422, detail="Unsupported language hint.")
-    store = LocalAudioStore(settings.workspace_dir / "uploads")
-    try:
-        asset = await store.save_upload(
-            file,
-            max_bytes=settings.max_upload_mb * 1024 * 1024,
+        report = await run_in_threadpool(
+            history_store.garbage_collect_assets,
+            min_age=timedelta(hours=settings.asset_gc_grace_hours),
         )
-    except UploadTooLargeError as exc:
-        raise HTTPException(
-            status_code=413, detail="Upload exceeds configured size limit."
-        ) from exc
-    return asset.model_copy(update={"language_hint": language})
-
-
-@app.post("/jobs", response_model=JobSnapshot, status_code=202)
-async def create_job(
-    file: UploadFile = File(...),
-    language: str | None = Form(default=None),
-    model_source: str = Form(default="network"),
-    model_endpoint: str | None = Form(default=None),
-    local_model_path: str | None = Form(default=None),
-    settings: Settings = Depends(get_settings),
-) -> JobSnapshot:
-    file_name = file.filename or "audio"
-    if model_source not in {"network", "local"}:
-        raise HTTPException(status_code=422, detail="Unsupported model source.")
-    orchestrator = get_orchestrator(
-        settings,
-        model_source=model_source,
-        model_endpoint=model_endpoint,
-        local_model_path=local_model_path,
-    )
-    asset = await _save_asset(file, language, settings)
-    history = get_history_store(settings)
-
-    async def work(update):
-        return await orchestrator.analyze(asset, progress=update)
-
-    def observe(snapshot: JobSnapshot, result: AnalysisResult | None) -> None:
-        history.update(
-            snapshot.id,
-            state=snapshot.state.value,
-            updated_at=snapshot.updated_at,
-            result=result if snapshot.state == JobState.COMPLETED else None,
-            error=snapshot.error,
-        )
-
-    snapshot = jobs.create(work, observer=observe)
-    history.create(
-        job_id=snapshot.id,
-        title=Path(file_name).stem,
-        file_name=file_name,
-        language=language,
-        state=snapshot.state.value,
-        created_at=snapshot.created_at,
-        updated_at=snapshot.updated_at,
-        audio_path=asset.path,
-        model_source=model_source,
-        model_location=(
-            local_model_path if model_source == "local"
-            else (model_endpoint or settings.omni_endpoint)
-        ),
-    )
-    return snapshot
-
-
-@app.get("/history", response_model=list[HistorySummary])
-async def list_history(
-    limit: int = 100,
-    history: HistoryStore = Depends(get_history_store),
-) -> list[HistorySummary]:
-    return history.list(limit=limit)
-
-
-@app.get("/history/{history_id}", response_model=HistoryDetail)
-async def get_history(
-    history_id: str,
-    history: HistoryStore = Depends(get_history_store),
-) -> HistoryDetail:
-    entry = history.get(history_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Analysis history not found.")
-    return entry
-
-
-@app.patch("/history/{history_id}", response_model=HistoryDetail)
-async def rename_history(
-    history_id: str,
-    payload: HistoryRename,
-    history: HistoryStore = Depends(get_history_store),
-) -> HistoryDetail:
-    entry = history.rename(history_id, payload.title)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Analysis history not found.")
-    return entry
-
-
-@app.patch("/history/{history_id}/lyrics", response_model=HistoryDetail)
-async def update_history_lyrics(
-    history_id: str,
-    payload: HistoryLyricsUpdate,
-    history: HistoryStore = Depends(get_history_store),
-) -> HistoryDetail:
-    entry = history.get(history_id)
-    if entry is None or entry.result is None:
-        raise HTTPException(status_code=404, detail="Analysis history not found.")
-    if any(not segment.text.strip() for segment in payload.lyrics):
-        raise HTTPException(status_code=422, detail="Lyrics text cannot be empty.")
-    duration = entry.duration_s
-    if duration is not None and any(
-        segment.span and segment.span.end_s > duration + 0.5
-        for segment in payload.lyrics
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="Lyrics timestamp exceeds audio duration.",
-        )
-    ordered = sorted(
-        payload.lyrics,
-        key=lambda segment: (
-            segment.span.start_s if segment.span else float("inf"),
-            segment.span.end_s if segment.span else float("inf"),
-        ),
-    )
-    revised = history.update_lyrics(history_id, ordered)
-    if revised is None:
-        raise HTTPException(status_code=404, detail="Analysis history not found.")
-    return revised
-
-
-@app.get(
-    "/history/{history_id}/revisions",
-    response_model=list[HistoryRevision],
-)
-async def list_history_revisions(
-    history_id: str,
-    history: HistoryStore = Depends(get_history_store),
-) -> list[HistoryRevision]:
-    if history.get(history_id) is None:
-        raise HTTPException(status_code=404, detail="Analysis history not found.")
-    return history.revisions(history_id)
-
-
-@app.post(
-    "/history/{history_id}/lyrics/retry",
-    response_model=HistoryLyricsRetryResult,
-)
-async def retry_history_lyrics(
-    history_id: str,
-    payload: HistoryLyricsRetryRequest,
-    settings: Settings = Depends(get_settings),
-    history: HistoryStore = Depends(get_history_store),
-) -> HistoryLyricsRetryResult:
-    entry = history.get(history_id)
-    audio_path = history.audio_path(history_id)
-    if entry is None or entry.result is None or audio_path is None:
-        raise HTTPException(status_code=404, detail="Cached analysis audio not found.")
-    if payload.end_s <= payload.start_s:
-        raise HTTPException(
-            status_code=422,
-            detail="Retry end time must be after start time.",
-        )
-    if payload.end_s - payload.start_s > settings.omni_chunk_seconds + 0.5:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Retry range cannot exceed {settings.omni_chunk_seconds:g} seconds.",
-        )
-    if entry.duration_s is not None and payload.end_s > entry.duration_s + 0.5:
-        raise HTTPException(
-            status_code=422,
-            detail="Retry range exceeds audio duration.",
-        )
-
-    asset = AudioAsset(
-        path=audio_path,
-        media_type="audio/wav",
-        size_bytes=audio_path.stat().st_size,
-        language_hint=entry.language,
-    )
-    prepared = await Preprocessor(settings.workspace_dir).prepare(asset)
-    try:
-        audio_bytes, clip_duration = await asyncio.to_thread(
-            slice_wav,
-            prepared.scene.path,
-            payload.start_s,
-            payload.end_s,
-        )
+        api.state.asset_gc_report = {
+            "removed_count": report.removed_count,
+            "reclaimed_bytes": report.reclaimed_bytes,
+            "grace_hours": settings.asset_gc_grace_hours,
+        }
     except Exception as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unable to prepare retry audio: {str(exc)[:300]}",
-        ) from exc
-
-    orchestrator = get_orchestrator(
-        settings,
-        model_source=entry.model_source,
-        model_endpoint=(
-            entry.model_location if entry.model_source == "network" else None
-        ),
-        local_model_path=(
-            entry.model_location if entry.model_source == "local" else None
-        ),
-    )
-    adapter = orchestrator.unified
-    if not isinstance(adapter, QwenOmniUnifiedAdapter):
-        raise HTTPException(status_code=422, detail="Model does not support retry.")
+        # Cleanup is maintenance, not a prerequisite for serving requests.
+        api.state.asset_gc_error = (
+            str(exc).strip() or exc.__class__.__name__
+        )[:1000]
     try:
-        if orchestrator.model_gate is None:
-            lyrics, issues = await adapter.retry_lyrics(
-                audio_bytes, clip_duration, entry.language
-            )
-        else:
-            async with orchestrator.model_gate:
-                lyrics, issues = await adapter.retry_lyrics(
-                    audio_bytes, clip_duration, entry.language
-                )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Model retry failed: {str(exc)[:500]}",
-        ) from exc
-
-    shifted = [
-        lyric.model_copy(
-            update={
-                "span": lyric.span.model_copy(
-                    update={
-                        "start_s": lyric.span.start_s + payload.start_s,
-                        "end_s": lyric.span.end_s + payload.start_s,
-                    }
-                )
-                if lyric.span
-                else None
-            }
-        )
-        for lyric in lyrics
-    ]
-    return HistoryLyricsRetryResult(
-        start_s=payload.start_s,
-        end_s=payload.start_s + clip_duration,
-        lyrics=shifted,
-        issues=issues,
-        source=adapter.source,
-    )
-
-
-@app.delete("/history/{history_id}", status_code=204)
-async def delete_history(
-    history_id: str,
-    history: HistoryStore = Depends(get_history_store),
-) -> Response:
-    snapshot = jobs.get(history_id)
-    if snapshot and snapshot.state in {JobState.QUEUED, JobState.RUNNING}:
-        raise HTTPException(status_code=409, detail="Cancel the running job first.")
-    if not history.delete(history_id):
-        raise HTTPException(status_code=404, detail="Analysis history not found.")
-    jobs.remove(history_id)
-    return Response(status_code=204)
-
-
-@app.get("/history/{history_id}/audio")
-async def get_history_audio(
-    history_id: str,
-    history: HistoryStore = Depends(get_history_store),
-) -> FileResponse:
-    path = history.audio_path(history_id)
-    if path is None:
-        raise HTTPException(status_code=404, detail="Cached audio not found.")
-    return FileResponse(path, filename=path.name)
-
-
-@app.post(
-    "/history/{history_id}/singing/score",
-    response_model=SingingScore,
-)
-async def score_history_singing(
-    history_id: str,
-    file: UploadFile = File(...),
-    settings: Settings = Depends(get_settings),
-    history: HistoryStore = Depends(get_history_store),
-) -> SingingScore:
-    reference_path = history.audio_path(history_id)
-    if reference_path is None:
-        raise HTTPException(status_code=404, detail="Cached reference audio not found.")
-    attempt = await _save_asset(file, None, settings)
-    try:
-        return await asyncio.to_thread(
-            score_singing,
-            reference_path,
-            attempt.path,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Singing score failed: {str(exc)[:500]}",
-        ) from exc
+        yield
     finally:
-        attempt.path.unlink(missing_ok=True)
+        if terminal_reconciler is not None:
+            terminal_reconciler.cancel()
+            await asyncio.gather(
+                terminal_reconciler,
+                return_exceptions=True,
+            )
+        if api.state.task_queue is not None:
+            await run_in_threadpool(api.state.task_queue.close)
+        await api.state.jobs.shutdown()
+        await api.state.local_server.aclose()
+        model_resources.clear_current_loop()
 
 
-def _job_or_404(job_id: str) -> JobSnapshot:
-    snapshot = jobs.get(job_id)
-    if snapshot is None:
-        raise HTTPException(status_code=404, detail="Analysis job not found.")
-    return snapshot
+def create_app(
+    *,
+    job_store: AnalysisJobStore | None = None,
+    auth_rate_limiter: AuthRateLimiter | None = None,
+) -> FastAPI:
+    """Build an isolated Music Insight API instance.
 
+    Runtime-only state lives on the application instance, which keeps tests
+    and future multi-process adapters from sharing accidental module globals.
+    """
 
-@app.get("/jobs/{job_id}", response_model=JobSnapshot)
-async def get_job(job_id: str) -> JobSnapshot:
-    return _job_or_404(job_id)
+    api = FastAPI(
+        title="Music Insight",
+        version=__version__,
+        lifespan=_lifespan,
+    )
+    allowed_origins = configured_web_origins()
+    settings = get_settings()
+    if job_store is not None:
+        api.state.jobs = job_store
+    elif settings.job_backend == "redis":
+        api.state.jobs = RedisAnalysisJobStore.from_settings(settings)
+    else:
+        api.state.jobs = AnalysisJobStore(
+            max_active=settings.max_active_jobs,
+            max_active_per_owner=settings.max_active_jobs_per_user,
+        )
+    if isinstance(api.state.jobs, RedisAnalysisJobStore):
+        from music_insight.distributed.celery_app import create_celery_app
 
+        api.state.task_queue = create_celery_app(settings)
+    else:
+        api.state.task_queue = None
+    api.state.local_server = create_local_server(settings)
+    api.state.local_compute_gate = model_resources.gate(
+        "music-insight://local-dsp",
+        settings.dsp_max_concurrency,
+    )
+    api.state.direct_work_limiter = CapacityLimiter(
+        max_active=settings.max_direct_work,
+        max_active_per_owner=settings.max_direct_work_per_user,
+        label="直接分析",
+    )
+    api.state.auth_kdf_limiter = CapacityLimiter(
+        max_active=settings.auth_kdf_max_concurrency,
+        label="认证计算",
+    )
+    api.state.auth_rate_limiter = auth_rate_limiter or AuthRateLimiter()
+    api.state.registration_lock = asyncio.Lock()
+    api.state.allowed_web_origins = frozenset(allowed_origins)
 
-@app.get("/jobs/{job_id}/result", response_model=AnalysisResult)
-async def get_job_result(job_id: str) -> AnalysisResult:
-    snapshot = _job_or_404(job_id)
-    if snapshot.state != JobState.COMPLETED:
-        raise HTTPException(status_code=409, detail="Analysis is not complete.")
-    result = jobs.result(job_id)
-    if result is None:
-        raise HTTPException(status_code=500, detail="Completed job has no result.")
-    return result
-
-
-@app.post("/jobs/{job_id}/cancel", response_model=JobSnapshot)
-async def cancel_job(job_id: str) -> JobSnapshot:
-    snapshot = jobs.cancel(job_id)
-    if snapshot is None:
-        raise HTTPException(status_code=404, detail="Analysis job not found.")
-    return snapshot
-
-
-@app.get("/jobs/{job_id}/events")
-async def job_events(job_id: str) -> StreamingResponse:
-    initial = _job_or_404(job_id)
-
-    async def events():
-        last_revision = -1
-        snapshot = initial
-        while True:
-            if snapshot.revision != last_revision:
-                yield snapshot_event(snapshot)
-                last_revision = snapshot.revision
-            if snapshot.state in {
-                JobState.COMPLETED,
-                JobState.FAILED,
-                JobState.CANCELLED,
-            }:
-                break
-            await asyncio.sleep(0.5)
-            current = jobs.get(job_id)
-            if current is None:
-                yield f"event: error\ndata: {json.dumps({'detail': 'job removed'})}\n\n"
-                break
-            snapshot = current
-
-    return StreamingResponse(
-        events(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    # Install the receive guard before the decorator middleware. Starlette
+    # prepends each added middleware, so the final order below becomes:
+    # CORS -> origin validation -> body/admission guard -> request parser.
+    api.add_middleware(
+        RequestBodyLimitMiddleware,
+        max_upload_bytes=settings.max_upload_mb * 1024 * 1024,
+        max_upload_units=settings.max_upload_units,
     )
 
+    @api.middleware("http")
+    async def verify_browser_origin(request: Request, call_next):
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            origin = request.headers.get("origin")
+            fetch_site = request.headers.get("sec-fetch-site", "").casefold()
+            if fetch_site == "cross-site":
+                return Response("Cross-site request not allowed.", status_code=403)
+            if origin and origin not in api.state.allowed_web_origins:
+                return Response("Origin not allowed.", status_code=403)
+            if not origin:
+                referer = request.headers.get("referer")
+                if referer:
+                    parsed = urlsplit(referer)
+                    referer_origin = (
+                        f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+                    )
+                    if referer_origin not in api.state.allowed_web_origins:
+                        return Response(
+                            "Referrer not allowed.",
+                            status_code=403,
+                        )
+        response = await call_next(request)
+        if request.url.path not in {
+            "/",
+            "/api/info",
+            "/health",
+            "/docs",
+            "/openapi.json",
+        }:
+            response.headers.setdefault("Cache-Control", "no-store")
+        return response
 
-@app.post("/analyze", response_model=AnalysisResult)
-async def analyze(
-    file: UploadFile = File(...),
-    language: str | None = Form(default=None),
-    settings: Settings = Depends(get_settings),
-    orchestrator: AnalysisOrchestrator = Depends(get_orchestrator),
-) -> AnalysisResult:
-    asset = await _save_asset(file, language, settings)
+    @api.exception_handler(CapacityLimitError)
+    async def capacity_limit_error(
+        _request: Request,
+        exc: CapacityLimitError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=503 if exc.global_limit else 429,
+            content={"detail": str(exc)},
+            headers={"Retry-After": "1"},
+        )
 
-    return await orchestrator.analyze(asset)
+    @api.exception_handler(DistributedJobUnavailable)
+    async def distributed_job_unavailable(
+        _request: Request,
+        exc: DistributedJobUnavailable,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": str(exc)},
+            headers={"Retry-After": "2"},
+        )
 
+    @api.exception_handler(RedisError)
+    async def redis_error(
+        _request: Request,
+        _exc: RedisError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Redis job backend is unavailable."},
+            headers={"Retry-After": "2"},
+        )
 
-@app.post("/analyze/markdown")
-async def analyze_markdown(
-    file: UploadFile = File(...),
-    language: str | None = Form(default=None),
-    settings: Settings = Depends(get_settings),
-    orchestrator: AnalysisOrchestrator = Depends(get_orchestrator),
-) -> dict[str, str]:
-    result = await analyze(
-        file=file,
-        language=language,
-        settings=settings,
-        orchestrator=orchestrator,
+    # Keep CORS outermost so early 413/503 responses remain visible to a
+    # configured cross-origin browser frontend.
+    api.add_middleware(
+        CORSMiddleware,
+        allow_origins=sorted(allowed_origins),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
-    return {"markdown": render_markdown_report(result)}
+
+    for grouped_router in (
+        auth.router,
+        system.router,
+        debug.router,
+        history.router,
+        singing.router,
+        job_routes.router,
+    ):
+        api.include_router(grouped_router)
+    return api
+
+
+app = create_app()
+
+# Compatibility aliases for callers that imported these from the original
+# monolithic module. New code should depend on request.app.state or the
+# dependency functions above.
+jobs: AnalysisJobStore = app.state.jobs
+
+
+__all__ = [
+    "ALLOWED_WEB_ORIGINS",
+    "app",
+    "configured_web_origins",
+    "create_app",
+    "get_account_store",
+    "get_current_user",
+    "get_history_store",
+    "get_job_store",
+    "get_orchestrator",
+    "jobs",
+    "validate_private_model_endpoint",
+]

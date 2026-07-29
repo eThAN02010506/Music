@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import librosa
 
+from music_insight.async_utils import run_sync_settled
 from music_insight.adapters.base import DspAdapter
 from music_insight.audio import decode_mono
 from music_insight.schemas import AudioAsset, DspResult, Evidence, EvidenceType, TimeSpan
@@ -12,7 +13,13 @@ class BasicDspAdapter(DspAdapter):
     """Deterministic BPM, key, and energy analysis backed by librosa."""
 
     async def analyze(self, asset: AudioAsset) -> DspResult:
-        audio, sample_rate = decode_mono(asset.path)
+        return await run_sync_settled(self._analyze_sync, asset)
+
+    def _analyze_sync(self, asset: AudioAsset) -> DspResult:
+        audio, sample_rate = decode_mono(
+            asset.path,
+            max_duration_s=asset.max_duration_s,
+        )
         if not audio.size:
             raise ValueError("音频为空，无法计算 DSP 指标。")
 
@@ -47,28 +54,57 @@ class BasicDspAdapter(DspAdapter):
         bpm_candidates: list[float] = []
         bpm_ambiguous = False
         octave_support_ratio: float | None = None
+        analysis_windows = self._analysis_windows(audio, sample_rate)
         if peak_rms > 1e-7 and duration >= 2.0:
-            onset_envelope = librosa.onset.onset_strength(y=audio, sr=sample_rate)
+            onset_parts = [
+                librosa.onset.onset_strength(y=part, sr=sample_rate)
+                for part in analysis_windows
+            ]
+            onset_envelope = np.concatenate(onset_parts)
+            tempogram_parts = [
+                librosa.feature.tempogram(
+                    onset_envelope=part,
+                    sr=sample_rate,
+                )
+                for part in onset_parts
+                if part.size >= 4
+            ]
+            tempogram = (
+                np.concatenate(tempogram_parts, axis=1)
+                if tempogram_parts
+                else np.empty((0, 0))
+            )
             tempo = librosa.feature.tempo(
-                onset_envelope=onset_envelope,
+                tg=tempogram,
                 sr=sample_rate,
                 aggregate=np.median,
-            )
+            ) if tempogram.size else np.asarray([0.0])
             tempo_value = float(np.asarray(tempo).reshape(-1)[0])
             if np.isfinite(tempo_value) and tempo_value > 0:
+                pulse = np.mean(tempogram, axis=1)
+                tempo_bins = librosa.tempo_frequencies(
+                    len(pulse),
+                    sr=sample_rate,
+                )
                 (
                     tempo_value,
                     bpm_candidates,
                     bpm_ambiguous,
                     octave_support_ratio,
                 ) = self._resolve_tempo_octave(
-                    tempo_value, onset_envelope, sample_rate
+                    tempo_value,
+                    pulse,
+                    tempo_bins,
                 )
                 bpm = round(tempo_value, 1)
-                bpm_confidence = self._tempo_confidence(onset_envelope, sample_rate)
+                bpm_confidence = self._tempo_confidence(
+                    pulse,
+                    tempo_bins,
+                    onset_envelope,
+                )
 
         key, key_confidence = (
-            self._estimate_key(audio, sample_rate)
+            self._estimate_key(analysis_windows, sample_rate)
             if peak_rms > 1e-7
             else (None, None)
         )
@@ -120,8 +156,8 @@ class BasicDspAdapter(DspAdapter):
     def _resolve_tempo_octave(
         cls,
         tempo: float,
-        onset_envelope: np.ndarray,
-        sample_rate: int,
+        pulse: np.ndarray,
+        tempo_bins: np.ndarray,
     ) -> tuple[float, list[float], bool, float | None]:
         """Prefer the perceptual half-time pulse when octave candidates are tied.
 
@@ -138,10 +174,14 @@ class BasicDspAdapter(DspAdapter):
             return tempo, [rounded], False, None
 
         primary_support = cls._pulse_support(
-            onset_envelope, sample_rate, tempo
+            pulse,
+            tempo_bins,
+            tempo,
         )
         half_support = cls._pulse_support(
-            onset_envelope, sample_rate, half_tempo
+            pulse,
+            tempo_bins,
+            half_tempo,
         )
         if primary_support <= 1e-9:
             return tempo, [rounded], False, None
@@ -159,18 +199,12 @@ class BasicDspAdapter(DspAdapter):
 
     @staticmethod
     def _pulse_support(
-        onset_envelope: np.ndarray,
-        sample_rate: int,
+        pulse: np.ndarray,
+        tempo_bins: np.ndarray,
         tempo: float,
     ) -> float:
-        if onset_envelope.size < 4:
+        if pulse.size < 4:
             return 0.0
-        tempogram = librosa.feature.tempogram(
-            onset_envelope=onset_envelope,
-            sr=sample_rate,
-        )
-        pulse = np.mean(tempogram, axis=1)
-        tempo_bins = librosa.tempo_frequencies(len(pulse), sr=sample_rate)
         valid = np.flatnonzero(np.isfinite(tempo_bins) & (tempo_bins > 0))
         if not valid.size:
             return 0.0
@@ -178,15 +212,13 @@ class BasicDspAdapter(DspAdapter):
         return float(pulse[valid[int(np.argmin(distances))]])
 
     @staticmethod
-    def _tempo_confidence(onset_envelope: np.ndarray, sample_rate: int) -> float:
+    def _tempo_confidence(
+        pulse: np.ndarray,
+        tempo_bins: np.ndarray,
+        onset_envelope: np.ndarray,
+    ) -> float:
         if onset_envelope.size < 4 or float(np.max(onset_envelope)) <= 1e-9:
             return 0.0
-        tempogram = librosa.feature.tempogram(
-            onset_envelope=onset_envelope,
-            sr=sample_rate,
-        )
-        pulse = np.mean(tempogram, axis=1)
-        tempo_bins = librosa.tempo_frequencies(len(pulse), sr=sample_rate)
         valid = np.isfinite(tempo_bins) & (tempo_bins >= 30) & (tempo_bins <= 300)
         plausible_pulse = pulse[valid]
         if plausible_pulse.size < 2 or float(np.max(plausible_pulse)) <= 1e-9:
@@ -199,10 +231,18 @@ class BasicDspAdapter(DspAdapter):
 
     @staticmethod
     def _estimate_key(
-        audio: np.ndarray, sample_rate: int
+        windows: list[np.ndarray],
+        sample_rate: int,
     ) -> tuple[str | None, float | None]:
-        chroma = librosa.feature.chroma_cqt(y=audio, sr=sample_rate)
-        profile = np.mean(chroma, axis=1)
+        profiles = []
+        for audio in windows:
+            harmonic = librosa.effects.harmonic(audio)
+            chroma = librosa.feature.chroma_cqt(
+                y=harmonic,
+                sr=sample_rate,
+            )
+            profiles.append(np.mean(chroma, axis=1))
+        profile = np.mean(profiles, axis=0)
         if not np.any(np.isfinite(profile)) or float(np.sum(profile)) <= 1e-9:
             return None, None
         profile = profile / np.linalg.norm(profile)
@@ -220,3 +260,29 @@ class BasicDspAdapter(DspAdapter):
         confidence = round(min(1.0, max(0.0, margin / 0.08)), 3)
         names = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"]
         return f"{names[root]} {mode}", confidence
+
+    @staticmethod
+    def _analysis_windows(
+        audio: np.ndarray,
+        sample_rate: int,
+        *,
+        window_seconds: float = 20.0,
+        max_windows: int = 6,
+    ) -> list[np.ndarray]:
+        """Sample bounded, continuous windows across the full recording.
+
+        Tempo and key should represent the whole song, but full-length HPSS and
+        tempograms have memory proportional to duration. Evenly spaced windows
+        retain beginning/middle/end evidence with a fixed memory ceiling.
+        """
+
+        window_samples = max(1, int(window_seconds * sample_rate))
+        if audio.size <= window_samples:
+            return [audio]
+        available = audio.size - window_samples
+        count = min(max_windows, max(1, int(np.ceil(audio.size / window_samples))))
+        starts = np.linspace(0, available, num=count, dtype=int)
+        return [
+            audio[start : start + window_samples]
+            for start in starts
+        ]

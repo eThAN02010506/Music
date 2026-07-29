@@ -16,9 +16,21 @@ async def discover_model(
     endpoint: str,
     models_path: str,
     timeout: float = 30.0,
+    *,
+    client: httpx.AsyncClient | None = None,
 ) -> str:
-    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-        response = await client.get(f"{endpoint.rstrip('/')}{api_path(models_path)}")
+    url = f"{endpoint.rstrip('/')}{api_path(models_path)}"
+    if client is None:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout, connect=8.0),
+            trust_env=False,
+        ) as owned_client:
+            response = await owned_client.get(url)
+    else:
+        response = await client.get(
+            url,
+            timeout=httpx.Timeout(timeout, connect=8.0),
+        )
     response.raise_for_status()
     payload = response.json()
     candidates = payload.get("data") or payload.get("models") or []

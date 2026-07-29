@@ -1,11 +1,12 @@
 [project]
 name = "music-insight"
-version = "0.1.0"
+version = "0.3.0"
 description = "Audio analysis pipeline for lyrics, soundscape, emotion, and literary interpretation."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "av>=18.0.0",
+    "celery[redis]>=5.6.0,<6",
     "fastapi>=0.116.0",
     "httpx>=0.27.0",
     "librosa>=0.11.0",
@@ -15,16 +16,28 @@ dependencies = [
     "python-multipart>=0.0.9",
     "streamlit>=1.40.0",
     "uvicorn[standard]>=0.30.0",
+    "websockets>=15.0,<17",
 ]
+
+[project.scripts]
+music-insight-worker = "music_insight.worker:main"
 
 [project.optional-dependencies]
 dev = [
+    "fakeredis[lua]>=2.28.0",
     "pytest>=8.2.0",
+    "ruff>=0.12.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff.lint]
+# Keep the mandatory gate focused on syntax/import correctness. The existing
+# codebase intentionally catches adapter failures for graceful DSP/model
+# degradation, so broad style/exception rules are reviewed separately.
+select = ["E4", "E7", "E9", "F"]
 
 [build-system]
 requires = ["setuptools>=68"]

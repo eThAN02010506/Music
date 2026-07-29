@@ -38,6 +38,7 @@ class AudioAsset(BaseModel):
     media_type: str
     size_bytes: int
     language_hint: str | None = None
+    max_duration_s: float | None = Field(default=None, gt=0)
 
 
 class LyricsSegment(BaseModel):

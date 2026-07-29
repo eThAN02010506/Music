@@ -53,6 +53,32 @@ def test_local_server_requires_audio_projector(tmp_path: Path):
         server.resolve(".")
 
 
+def test_local_server_readiness_candidates_must_match_active_model(
+    tmp_path: Path,
+):
+    model = tmp_path / "Qwen3-Omni-3B-Q4_K_M.gguf"
+    model.write_bytes(b"model")
+    server = LocalOmniServer(
+        root=tmp_path,
+        endpoint="http://127.0.0.1:8011",
+        executable="llama-server",
+    )
+    server._active_model = model
+
+    assert server._advertises_active_model(
+        [{"id": model.stem}]
+    ) is True
+    assert server._advertises_active_model(
+        [{"model": str(model)}]
+    ) is True
+    assert server._advertises_active_model(
+        [{"name": "MiniCPM-o-4_5-Q4_K_M.gguf"}]
+    ) is False
+    assert server._advertises_active_model(
+        [{"id": ""}, {"model": 123}, "not-a-model"]
+    ) is False
+
+
 def test_default_orchestrator_keeps_8004():
     orchestrator = get_orchestrator(Settings())
 

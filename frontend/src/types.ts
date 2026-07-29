@@ -61,8 +61,11 @@ export interface AnalysisResult {
 
 export interface HealthResult {
   status: string;
-  model_endpoint: string;
   mode: string;
+}
+
+export interface RuntimeConfig {
+  model_endpoint: string;
   local_model_root: string;
   local_runner_available: boolean;
 }
@@ -71,7 +74,10 @@ export interface ModelProbeResult {
   endpoint: string;
   online: boolean;
   model: string | null;
+  protocol: string | null;
+  analysis_supported: boolean | null;
   audio_supported: boolean | null;
+  openai_audio_supported: boolean | null;
   service: string;
   detail: string;
 }
@@ -131,4 +137,43 @@ export interface SingingScore {
     error_semitones: number | null;
   }>;
   notes: string[];
+}
+
+export interface User {
+  id: string;
+  username: string;
+  created_at: string;
+}
+
+export interface LeaderboardEntry {
+  rank: number;
+  username: string;
+  total: number;
+  pitch: number;
+  rhythm: number;
+  completeness: number;
+  stability: number;
+  created_at: string;
+  attempts: number;
+  source: string;
+  is_current_user: boolean;
+}
+
+export interface Leaderboard {
+  category: string;
+  period: string;
+  generated_at: string;
+  entries: LeaderboardEntry[];
+}
+
+export interface SingingAttempt {
+  id: string;
+  user_id: string;
+  source: string;
+  category: string;
+  history_id: string | null;
+  reference_name: string | null;
+  performance_name: string | null;
+  created_at: string;
+  score: SingingScore;
 }

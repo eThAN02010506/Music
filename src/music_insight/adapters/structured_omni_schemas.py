@@ -4,23 +4,38 @@ from typing import Any
 
 
 def chunk_response_format() -> dict[str, Any]:
+    nullable_number = {
+        "anyOf": [
+            {"type": "number", "minimum": 0},
+            {"type": "null"},
+        ]
+    }
+    nullable_confidence = {
+        "anyOf": [
+            {"type": "number", "minimum": 0, "maximum": 1},
+            {"type": "null"},
+        ]
+    }
     timed_item = {
         "type": "object",
         "properties": {
             "text": {"type": "string"},
-            "start_s": {"type": "number", "minimum": 0},
-            "end_s": {"type": "number", "minimum": 0},
-            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "start_s": nullable_number,
+            "end_s": nullable_number,
+            "confidence": nullable_confidence,
         },
-        "required": ["text"],
+        "required": ["text", "start_s", "end_s", "confidence"],
         "additionalProperties": False,
     }
     lyric_item = {
         **timed_item,
         "properties": {
             **timed_item["properties"],
-            "language": {"type": "string"},
+            "language": {
+                "anyOf": [{"type": "string"}, {"type": "null"}]
+            },
         },
+        "required": [*timed_item["required"], "language"],
     }
     return {
         "type": "json_schema",

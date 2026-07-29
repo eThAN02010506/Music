@@ -1,17 +1,26 @@
 import asyncio
 import io
+import threading
 from unittest.mock import patch
 import wave
 
+import av
 import numpy as np
 import pytest
+from fastapi import HTTPException
 from starlette.datastructures import Headers, UploadFile
 
 from music_insight.adapters.dsp import BasicDspAdapter
 from music_insight.adapters.openai_compat_utils import parse_json_object
 from music_insight.adapters.qwen_omni_unified import QwenOmniUnifiedAdapter
 from music_insight.api.app import app
-from music_insight.audio import slice_wav
+from music_insight.api.services.uploads import save_audio_upload
+from music_insight.audio import (
+    AudioDurationExceededError,
+    decode_mono,
+    slice_wav,
+)
+from music_insight.config import Settings
 from music_insight.pipeline.orchestrator import AnalysisOrchestrator
 from music_insight.pipeline.preprocess import Preprocessor
 from music_insight.schemas import (
@@ -89,6 +98,20 @@ class FakeRecoveringOmni(QwenOmniUnifiedAdapter):
 
     async def _synthesize_report(self, **kwargs):
         return "最终报告。", ["主题"], [], []
+
+
+class FakeHallucinatedRecoveryOmni(FakeRecoveringOmni):
+    async def _recover_missing(self, **kwargs):
+        return {
+            "lyrics": [
+                {
+                    "text": "this recovered lyric is impossibly dense",
+                    "start_s": 0,
+                    "end_s": 0.05,
+                }
+            ],
+            "emotion_timeline": [],
+        }
 
 
 class FakeEmotionMissingOmni(QwenOmniUnifiedAdapter):
@@ -208,6 +231,43 @@ def _write_test_audio(path, seconds=4.0, sample_rate=22_050):
         output.writeframes(pcm.tobytes())
 
 
+def _write_mp3_with_apev2_tag(path, seconds=1.0, sample_rate=44_100):
+    samples = np.zeros((1, int(seconds * sample_rate)), dtype=np.float32)
+    with av.open(str(path), "w", format="mp3") as output:
+        stream = output.add_stream("mp3", rate=sample_rate)
+        stream.layout = "mono"
+        frame = av.AudioFrame.from_ndarray(
+            samples,
+            format="fltp",
+            layout="mono",
+        )
+        frame.sample_rate = sample_rate
+        for packet in stream.encode(frame):
+            output.mux(packet)
+        for packet in stream.encode(None):
+            output.mux(packet)
+
+    value = b"test"
+    field = (
+        len(value).to_bytes(4, "little")
+        + (0).to_bytes(4, "little")
+        + b"Title\0"
+        + value
+    )
+    tag_size = len(field) + 32
+    footer = (
+        b"APETAGEX"
+        + (2_000).to_bytes(4, "little")
+        + tag_size.to_bytes(4, "little")
+        + (1).to_bytes(4, "little")
+        + (0).to_bytes(4, "little")
+        + b"\0" * 8
+    )
+    with path.open("ab") as output:
+        output.write(field)
+        output.write(footer)
+
+
 def test_orchestrator_uses_only_unified_model(tmp_path):
     audio = tmp_path / "song.wav"
     _write_test_audio(audio)
@@ -271,6 +331,39 @@ def test_real_dsp_returns_metrics_and_energy(tmp_path):
     assert result.evidence[0].confidence != 1.0
 
 
+def test_dsp_analysis_does_not_block_event_loop(tmp_path, monkeypatch):
+    audio = tmp_path / "audio.wav"
+    _write_test_audio(audio)
+    adapter = BasicDspAdapter()
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+
+    def blocked_analysis(asset):
+        worker_started.set()
+        if not release_worker.wait(timeout=2):
+            raise TimeoutError("test did not release DSP worker")
+        return DspResult()
+
+    monkeypatch.setattr(adapter, "_analyze_sync", blocked_analysis)
+
+    async def exercise():
+        task = asyncio.create_task(adapter.analyze(_asset(audio)))
+        for _ in range(100):
+            if worker_started.is_set():
+                break
+            await asyncio.sleep(0)
+        assert worker_started.is_set()
+        # This checkpoint runs while the synchronous DSP worker is blocked.
+        await asyncio.sleep(0)
+        assert not task.done()
+        release_worker.set()
+        return await task
+
+    result = asyncio.run(exercise())
+
+    assert isinstance(result, DspResult)
+
+
 def test_dsp_prefers_supported_half_time_candidate():
     onset = np.ones(64, dtype=np.float32)
 
@@ -324,6 +417,91 @@ def test_preprocessor_creates_omni_wav(tmp_path):
     assert any(item.id == "preprocess.omni.wav" for item in prepared.evidence)
 
 
+def test_preprocessor_concurrent_same_content_publishes_atomic_wav(
+    tmp_path,
+    monkeypatch,
+):
+    import music_insight.audio as audio_module
+
+    audio = tmp_path / "source.wav"
+    _write_test_audio(audio)
+    real_decode = audio_module.decode_mono
+    concurrent_decodes = threading.Barrier(2)
+
+    def synchronized_decode(*args, **kwargs):
+        concurrent_decodes.wait(timeout=2)
+        return real_decode(*args, **kwargs)
+
+    monkeypatch.setattr(audio_module, "decode_mono", synchronized_decode)
+    preprocessor = Preprocessor(workspace_dir=tmp_path / "cache")
+
+    async def exercise():
+        return await asyncio.gather(
+            preprocessor.prepare(_asset(audio)),
+            preprocessor.prepare(_asset(audio)),
+        )
+
+    first, second = asyncio.run(exercise())
+
+    assert first.scene.path == second.scene.path
+    assert first.scene.path != audio
+    assert first.scene.path.stat().st_size > 44
+    assert first.evidence[0].id == "preprocess.omni.wav"
+    assert second.evidence[0].id == "preprocess.omni.wav"
+    assert not list(first.scene.path.parent.glob("*.tmp.wav"))
+
+
+def test_preprocessor_does_not_fallback_to_original_on_normalization_error(
+    tmp_path,
+    monkeypatch,
+):
+    audio = tmp_path / "source.wav"
+    _write_test_audio(audio)
+    preprocessor = Preprocessor(workspace_dir=tmp_path / "cache")
+
+    def fail_normalization(*args, **kwargs):
+        raise RuntimeError("test normalization failure")
+
+    monkeypatch.setattr(preprocessor, "_normalize_for_omni", fail_normalization)
+    prepared = asyncio.run(preprocessor.prepare(_asset(audio)))
+
+    assert prepared.scene is None
+    assert prepared.evidence[0].id == "preprocess.omni.error"
+    assert "已跳过统一模型" in prepared.evidence[0].text
+
+
+def test_orchestrator_skips_unified_model_when_normalization_fails(
+    tmp_path,
+    monkeypatch,
+):
+    class MustNotRunUnified(FakeUnifiedAdapter):
+        called = False
+
+        async def analyze(self, asset, dsp, progress=None):
+            self.called = True
+            raise AssertionError("unified model must not receive the original file")
+
+    audio = tmp_path / "source.wav"
+    _write_test_audio(audio)
+    preprocessor = Preprocessor(workspace_dir=tmp_path / "cache")
+
+    def fail_normalization(*args, **kwargs):
+        raise RuntimeError("test normalization failure")
+
+    monkeypatch.setattr(preprocessor, "_normalize_for_omni", fail_normalization)
+    unified = MustNotRunUnified()
+    orchestrator = AnalysisOrchestrator(
+        unified=unified,
+        dsp=FakeDspAdapter(),
+        preprocessor=preprocessor,
+    )
+
+    result = asyncio.run(orchestrator.analyze(_asset(audio)))
+
+    assert unified.called is False
+    assert not result.lyrics
+
+
 def test_chat_parser_handles_fenced_json():
     parsed = parse_json_object(
         '```json\n{"themes":["希望"],"narrative":"情绪上升。"}\n```'
@@ -344,7 +522,7 @@ def test_time_span_rejects_reverse_range():
         TimeSpan(start_s=2.0, end_s=1.0)
 
 
-def test_unified_adapter_chunks_wav(tmp_path):
+def test_unified_adapter_chunks_wav_with_overlap(tmp_path):
     audio = tmp_path / "long.wav"
     _write_test_audio(audio, seconds=12.0, sample_rate=16_000)
     adapter = QwenOmniUnifiedAdapter(
@@ -355,9 +533,11 @@ def test_unified_adapter_chunks_wav(tmp_path):
 
     chunks = list(adapter._wav_chunks(audio))
 
-    assert len(chunks) == 3
-    assert chunks[0][1:] == (0.0, 5.0)
-    assert chunks[-1][1:] == (10.0, 12.0)
+    assert [chunk[1:] for chunk in chunks] == [
+        (0.0, 5.0),
+        (3.5, 8.5),
+        (7.0, 12.0),
+    ]
 
 
 def test_slice_wav_returns_requested_excerpt(tmp_path):
@@ -399,7 +579,7 @@ def test_chunk_parser_offsets_and_bounds_timestamps():
     assert parsed["sound_events"][0].span.end_s == 60.0
 
 
-def test_chunk_parser_splits_multiline_lyrics_and_distributes_span():
+def test_chunk_parser_keeps_missing_timestamps_unknown_for_each_line():
     adapter = QwenOmniUnifiedAdapter(
         endpoint="http://127.0.0.1:9999", model="test-model"
     )
@@ -418,8 +598,7 @@ def test_chunk_parser_splits_multiline_lyrics_and_distributes_span():
     )
 
     assert [item.text for item in parsed["lyrics"]] == ["first line", "second line"]
-    assert parsed["lyrics"][0].span == TimeSpan(start_s=0.0, end_s=5.0)
-    assert parsed["lyrics"][1].span == TimeSpan(start_s=5.0, end_s=10.0)
+    assert [item.span for item in parsed["lyrics"]] == [None, None]
 
 
 def test_chunk_parser_rejects_prompt_placeholders():
@@ -487,6 +666,26 @@ def test_unified_adapter_recovers_missing_lyrics(tmp_path):
     assert result.asr.lyrics[0].text == "hello"
     assert result.scene.emotion_timeline == []
     assert any(item.id.endswith(".recovery") for item in result.scene.evidence)
+
+
+def test_missing_lyrics_recovery_is_quality_filtered_before_use(tmp_path):
+    audio = tmp_path / "recover-hallucination.wav"
+    _write_test_audio(audio, seconds=2.0, sample_rate=16_000)
+    adapter = FakeHallucinatedRecoveryOmni(
+        endpoint="http://127.0.0.1:9999",
+        model="test-model",
+    )
+
+    result = asyncio.run(adapter.analyze(_asset(audio, language="en"), DspResult()))
+
+    assert result.asr.lyrics == []
+    quality_evidence = next(
+        item
+        for item in result.scene.evidence
+        if item.id.endswith(".recovery.quality")
+    )
+    assert quality_evidence.confidence == 0
+    assert quality_evidence.metadata["issues"]
 
 
 def test_unified_adapter_reports_chunk_and_synthesis_progress(tmp_path):
@@ -653,14 +852,14 @@ def test_chat_json_retries_malformed_success_response():
     assert adapter.requests[1]["max_tokens"] == 1200
 
 
-def test_adapter_labels_minicpm_model_family():
+def test_qwen_adapter_does_not_guess_transport_from_model_name():
     adapter = QwenOmniUnifiedAdapter(
         endpoint="http://127.0.0.1:9999",
         model="MiniCPM-o-4_5-Q4_K_M.gguf",
     )
 
     assert asyncio.run(adapter._model()) == "MiniCPM-o-4_5-Q4_K_M.gguf"
-    assert adapter.source == "MiniCPM-o · http://127.0.0.1:9999"
+    assert adapter.source == "Qwen Omni · http://127.0.0.1:9999"
 
 
 def test_chunk_parser_filters_artificial_boundary_clicks():
@@ -714,7 +913,7 @@ def test_inferred_atmosphere_is_marked_interpretive_with_basis():
 
 
 def test_api_exposes_no_tts_route():
-    paths = {route.path for route in app.routes}
+    paths = set(app.openapi()["paths"])
 
     assert "/analyze" in paths
     assert "/synthesize" not in paths
@@ -732,3 +931,106 @@ def test_upload_store_stops_before_oversized_file_is_persisted(tmp_path):
         asyncio.run(store.save_upload(upload, max_bytes=16))
 
     assert list((tmp_path / "uploads").iterdir()) == []
+
+
+def test_upload_store_removes_partial_file_when_cancelled(tmp_path):
+    class SlowUpload:
+        filename = "cancelled.wav"
+        content_type = "audio/wav"
+
+        def __init__(self):
+            self.read_count = 0
+            self.second_read_started = asyncio.Event()
+
+        async def read(self, size):
+            self.read_count += 1
+            if self.read_count == 1:
+                return b"partial"
+            self.second_read_started.set()
+            await asyncio.Event().wait()
+
+    store = LocalAudioStore(tmp_path / "uploads")
+
+    async def exercise():
+        upload = SlowUpload()
+        task = asyncio.create_task(store.save_upload(upload))  # type: ignore[arg-type]
+        await asyncio.wait_for(upload.second_read_started.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(exercise())
+
+    assert list((tmp_path / "uploads").iterdir()) == []
+
+
+def test_decode_mono_stops_at_duration_cap(tmp_path):
+    audio = tmp_path / "too-long.wav"
+    _write_test_audio(audio, seconds=2.0, sample_rate=8_000)
+
+    with pytest.raises(AudioDurationExceededError):
+        decode_mono(audio, sample_rate=8_000, max_duration_s=1.0)
+
+
+def test_decode_mono_ignores_valid_trailing_apev2_metadata(tmp_path):
+    audio = tmp_path / "ape-tagged.mp3"
+    _write_mp3_with_apev2_tag(audio)
+
+    decoded, sample_rate = decode_mono(audio, sample_rate=16_000)
+
+    assert sample_rate == 16_000
+    assert len(decoded) / sample_rate == pytest.approx(1.0, abs=0.05)
+
+
+def test_decode_mono_rejects_invalid_audio_with_apev2_like_footer(tmp_path):
+    audio = tmp_path / "invalid.mp3"
+    _write_mp3_with_apev2_tag(audio)
+    data = audio.read_bytes()
+    tag_start = len(data) - int.from_bytes(data[-20:-16], "little")
+    audio.write_bytes(b"not valid mp3 audio" + data[tag_start:])
+
+    with pytest.raises(av.FFmpegError):
+        decode_mono(audio, sample_rate=16_000)
+
+
+def test_upload_validation_rejects_overlong_and_invalid_audio(tmp_path):
+    long_audio = tmp_path / "long.wav"
+    _write_test_audio(long_audio, seconds=61.0, sample_rate=8_000)
+    settings = Settings(workspace_dir=tmp_path / "workspace", max_audio_minutes=1)
+
+    async def exercise():
+        overlong = UploadFile(
+            file=io.BytesIO(long_audio.read_bytes()),
+            filename="long.wav",
+            headers=Headers({"content-type": "audio/wav"}),
+        )
+        with pytest.raises(HTTPException) as duration_error:
+            await save_audio_upload(
+                overlong,
+                "en",
+                settings,
+                "user-a",
+            )
+        invalid = UploadFile(
+            file=io.BytesIO(b"not an audio container"),
+            filename="invalid.wav",
+            headers=Headers({"content-type": "audio/wav"}),
+        )
+        with pytest.raises(HTTPException) as invalid_error:
+            await save_audio_upload(
+                invalid,
+                "en",
+                settings,
+                "user-a",
+            )
+        return duration_error.value, invalid_error.value
+
+    duration_error, invalid_error = asyncio.run(exercise())
+
+    assert duration_error.status_code == 413
+    assert invalid_error.status_code == 415
+    assert not [
+        path
+        for path in (settings.workspace_dir / "users").rglob("*")
+        if path.is_file()
+    ]

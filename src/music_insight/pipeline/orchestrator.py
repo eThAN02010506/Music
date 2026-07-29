@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-import asyncio
+from contextlib import AbstractAsyncContextManager
 import inspect
 import re
 
@@ -27,12 +27,14 @@ class AnalysisOrchestrator:
         dsp: DspAdapter,
         preprocessor: Preprocessor | None = None,
         fusion: FusionEngine | None = None,
-        model_gate: asyncio.Semaphore | None = None,
+        dsp_gate: AbstractAsyncContextManager[None] | None = None,
+        model_gate: AbstractAsyncContextManager[None] | None = None,
     ) -> None:
         self.unified = unified
         self.dsp = dsp
         self.preprocessor = preprocessor or Preprocessor()
         self.fusion = fusion or FusionEngine()
+        self.dsp_gate = dsp_gate
         self.model_gate = model_gate
 
     async def analyze(
@@ -41,16 +43,29 @@ class AnalysisOrchestrator:
         progress: Callable[[str, float, str], Awaitable[None] | None] | None = None,
     ) -> AnalysisResult:
         await self._notify(progress, "preprocessing", 0.08, "正在标准化音频")
-        prepared = await self.preprocessor.prepare(asset)
+        if self.dsp_gate is None:
+            prepared = await self.preprocessor.prepare(asset)
+        else:
+            async with self.dsp_gate:
+                prepared = await self.preprocessor.prepare(asset)
         await self._notify(progress, "dsp", 0.18, "正在计算节拍、调性与能量")
         try:
-            dsp_result = await self.dsp.analyze(prepared.original)
+            if self.dsp_gate is None:
+                dsp_result = await self.dsp.analyze(prepared.original)
+            else:
+                async with self.dsp_gate:
+                    dsp_result = await self.dsp.analyze(prepared.original)
         except Exception as exc:
             dsp_result = DspResult(
                 evidence=[self._error_evidence("dsp", "librosa DSP", exc)]
             )
         await self._notify(progress, "model_queue", 0.32, "正在等待模型资源")
         try:
+            if prepared.scene is None:
+                raise RuntimeError(
+                    "音频标准化失败；统一模型仅接收标准 WAV，未发送原始文件。"
+                )
+
             async def model_progress(
                 stage: str, model_progress: float, message: str
             ) -> None:

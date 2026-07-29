@@ -12,6 +12,8 @@ DEFAULT_API_URL = "http://127.0.0.1:8000"
 
 def post_audio(
     api_url: str,
+    username: str,
+    password: str,
     file_name: str,
     content_type: str,
     data: bytes,
@@ -22,10 +24,26 @@ def post_audio(
 
     timeout = httpx.Timeout(3600.0, connect=10.0)
     with httpx.Client(timeout=timeout) as client:
-        form = {"language": language} if language else None
-        response = client.post(endpoint, files=files, data=form)
-        response.raise_for_status()
-        return response.json()
+        logged_in = False
+        try:
+            login_response = client.post(
+                f"{api_url.rstrip('/')}/auth/login",
+                json={"username": username, "password": password},
+            )
+            login_response.raise_for_status()
+            logged_in = True
+            form = {"language": language} if language else None
+            response = client.post(endpoint, files=files, data=form)
+            response.raise_for_status()
+            return response.json()
+        finally:
+            if logged_in:
+                try:
+                    client.post(f"{api_url.rstrip('/')}/auth/logout")
+                except httpx.HTTPError:
+                    # The client is closing; an expired debugging session will
+                    # still be cleaned by the account store later.
+                    pass
 
 
 def render_evidence(evidence: list[dict[str, Any]]) -> None:
@@ -58,6 +76,8 @@ def main() -> None:
     with st.sidebar:
         st.header("设置")
         api_url = st.text_input("API 地址", value=DEFAULT_API_URL)
+        username = st.text_input("本地账号")
+        password = st.text_input("密码", type="password")
         uploaded = st.file_uploader(
             "上传音频",
             type=["wav", "mp3", "m4a", "flac", "ogg", "aac"],
@@ -73,7 +93,11 @@ def main() -> None:
         language = language_codes[language_label]
         st.caption("统一模型：Qwen3-Omni · 192.168.1.97:8004")
         st.caption("策略：30 秒音频分块 + 同模型最终融合 + 本地 DSP")
-        analyze = st.button("开始分析", type="primary", disabled=uploaded is None)
+        analyze = st.button(
+            "开始分析",
+            type="primary",
+            disabled=uploaded is None or not username or not password,
+        )
 
         st.divider()
         st.markdown("接口入口")
@@ -100,7 +124,13 @@ def main() -> None:
                 "分析中：8004 分块提取歌词、声景与情绪 → 同模型最终融合…"
             ):
                 result = post_audio(
-                    api_url, uploaded.name, content_type, data, language
+                    api_url,
+                    username,
+                    password,
+                    uploaded.name,
+                    content_type,
+                    data,
+                    language,
                 )
                 st.session_state["analysis_result"] = result
         except httpx.HTTPStatusError as exc:

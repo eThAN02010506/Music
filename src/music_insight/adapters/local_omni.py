@@ -30,6 +30,7 @@ class LocalOmniServer:
         self._lock = asyncio.Lock()
         self._process: asyncio.subprocess.Process | None = None
         self._active_model: Path | None = None
+        self._log_path = self.root / "llama-server.log"
 
     def resolve(self, submitted_path: str) -> tuple[Path, Path]:
         candidate = Path(submitted_path).expanduser()
@@ -67,7 +68,12 @@ class LocalOmniServer:
     async def ensure_running(self, submitted_path: str) -> None:
         model, projector = self.resolve(submitted_path)
         async with self._lock:
-            if self._active_model == model and await self._ready():
+            if (
+                self._active_model == model
+                and self._process is not None
+                and self._process.returncode is None
+                and await self._ready()
+            ):
                 return
             executable = shutil.which(self.executable)
             if executable is None:
@@ -75,49 +81,121 @@ class LocalOmniServer:
                     f"未找到 {self.executable}。请先安装支持该 Qwen Omni GGUF 的 llama.cpp，"
                     "或改用本机已运行的 OpenAI 兼容接口地址。"
                 )
-            if self._process and self._process.returncode is None:
-                self._process.terminate()
-                try:
-                    await asyncio.wait_for(self._process.wait(), timeout=10)
-                except TimeoutError:
-                    self._process.kill()
-                    await self._process.wait()
+            await self._stop_locked()
 
             from urllib.parse import urlsplit
 
             parsed = urlsplit(self.endpoint)
             port = parsed.port or 80
-            self._process = await asyncio.create_subprocess_exec(
-                executable,
-                "-m",
-                str(model),
-                "--mmproj",
-                str(projector),
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(port),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
+            self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self.root.chmod(0o700)
+            with self._log_path.open("ab") as log_file:
+                self._log_path.chmod(0o600)
+                self._process = await asyncio.create_subprocess_exec(
+                    executable,
+                    "-m",
+                    str(model),
+                    "--mmproj",
+                    str(projector),
+                    "--alias",
+                    model.stem,
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                    stdout=log_file,
+                    stderr=log_file,
+                )
             self._active_model = model
-            for _ in range(240):
-                if self._process.returncode is not None:
-                    raise LocalModelConfigurationError(
-                        f"本地模型服务启动失败，退出码 {self._process.returncode}。"
-                    )
-                if await self._ready():
-                    return
-                await asyncio.sleep(0.5)
-            raise LocalModelConfigurationError("本地模型在 120 秒内未准备就绪。")
+            try:
+                for _ in range(240):
+                    if self._process.returncode is not None:
+                        raise LocalModelConfigurationError(
+                            "本地模型服务启动失败，退出码 "
+                            f"{self._process.returncode}；日志：{self._log_path}"
+                        )
+                    if await self._ready():
+                        return
+                    await asyncio.sleep(0.5)
+                raise LocalModelConfigurationError(
+                    f"本地模型在 120 秒内未准备就绪；日志：{self._log_path}"
+                )
+            except BaseException:
+                await self._stop_locked()
+                raise
+
+    async def aclose(self) -> None:
+        """Idempotently stop the managed child process."""
+
+        async with self._lock:
+            await self._stop_locked()
+
+    async def _stop_locked(self) -> None:
+        process = self._process
+        self._process = None
+        self._active_model = None
+        if process is None or process.returncode is not None:
+            return
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=10)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
 
     async def _ready(self) -> bool:
         try:
-            async with httpx.AsyncClient(timeout=1.5) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(1.5, connect=0.5),
+                trust_env=False,
+            ) as client:
                 response = await client.get(f"{self.endpoint}/v1/models")
-            return response.is_success
-        except httpx.HTTPError:
+                response.raise_for_status()
+                payload = response.json()
+                candidates = payload.get("data") or payload.get("models") or []
+                if not self._advertises_active_model(candidates):
+                    return False
+                props = await client.get(f"{self.endpoint}/props")
+                if props.is_success:
+                    props_payload = props.json()
+                    modalities = props_payload.get("modalities")
+                    if (
+                        isinstance(modalities, dict)
+                        and modalities.get("audio") is False
+                    ):
+                        return False
+            return True
+        except (httpx.HTTPError, ValueError, TypeError):
             return False
+
+    def _advertises_active_model(self, candidates: object) -> bool:
+        """Confirm readiness for this server's model, not an unrelated port."""
+
+        if self._active_model is None or not isinstance(candidates, list):
+            return False
+        expected = {
+            str(self._active_model),
+            self._active_model.name,
+            self._active_model.stem,
+        }
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            value = item.get("id") or item.get("model") or item.get("name")
+            if not isinstance(value, str) or not value.strip():
+                continue
+            candidate = value.strip()
+            if candidate in expected:
+                return True
+            # llama.cpp versions differ on whether they advertise an absolute
+            # path, basename, or alias. All must still identify this file.
+            candidate_path = Path(candidate)
+            if (
+                candidate_path.name == self._active_model.name
+                or candidate_path.stem == self._active_model.stem
+            ):
+                return True
+        return False
 
 
 class ManagedLocalOmniAdapter(QwenOmniUnifiedAdapter):

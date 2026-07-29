@@ -5,17 +5,19 @@ import json
 from typing import Any
 
 from music_insight.api.history import HistoryStore
-from music_insight.api.jobs import AnalysisJobStore
+from music_insight.api.jobs import JobEvent, JobSnapshot
+from music_insight.schemas import AnalysisResult
 from music_insight.config import Settings
 
 
 def debug_state(
-    jobs: AnalysisJobStore,
     history: HistoryStore,
     settings: Settings,
+    recent_jobs: list[JobSnapshot],
+    *,
+    user_id: str,
 ) -> dict[str, Any]:
-    recent_history = history.list(limit=20)
-    recent_jobs = jobs.list(limit=20)
+    recent_history = history.list(limit=20, user_id=user_id)
     issues: list[dict[str, str]] = []
     for job in recent_jobs:
         if job.persistence_error:
@@ -46,7 +48,7 @@ def debug_state(
                     "time": entry.updated_at.isoformat(),
                 }
             )
-        detail = history.get(entry.id)
+        detail = history.get(entry.id, user_id=user_id)
         if detail and detail.result:
             for warning in detail.result.warnings:
                 issues.append(
@@ -66,6 +68,7 @@ def debug_state(
             "model_endpoint": settings.omni_endpoint,
             "chunk_seconds": settings.omni_chunk_seconds,
             "model_max_concurrency": settings.omni_max_concurrency,
+            "job_backend": settings.job_backend,
             "workspace": str(settings.workspace_dir.resolve()),
         },
         "jobs": [item.model_dump(mode="json") for item in recent_jobs],
@@ -86,18 +89,26 @@ def diagnostic_report(state: dict[str, Any]) -> str:
 
 def task_detail(
     task_id: str,
-    jobs: AnalysisJobStore,
     history: HistoryStore,
+    snapshot: JobSnapshot | None,
+    events: list[JobEvent],
+    job_result: AnalysisResult | None,
+    *,
+    user_id: str,
 ) -> dict[str, Any] | None:
-    snapshot = jobs.get(task_id)
-    history_entry = history.get(task_id)
+    history_entry = history.get(task_id, user_id=user_id)
     if snapshot is None and history_entry is None:
         return None
-    result = jobs.result(task_id) or (history_entry.result if history_entry else None)
+    result = job_result or (
+        history_entry.result if history_entry else None
+    )
     return {
         "id": task_id,
         "snapshot": snapshot.model_dump(mode="json") if snapshot else None,
-        "events": [event.model_dump(mode="json") for event in jobs.events(task_id)],
+        "events": [
+            event.model_dump(mode="json")
+            for event in events
+        ],
         "history": history_entry.model_dump(mode="json") if history_entry else None,
         "result": result.model_dump(mode="json") if result else None,
     }
@@ -122,7 +133,7 @@ DEBUG_PAGE = """<!doctype html>
   </style>
 </head>
 <body>
-  <header><h1><span>●</span> Music Insight / Debug</h1><nav><a href="http://127.0.0.1:5174/">打开正式界面</a><a href="/docs">API 文档</a><a href="/debug/report" download>下载诊断报告</a><button id="refresh">刷新</button></nav></header>
+  <header><h1><span>●</span> Music Insight / Debug</h1><nav><a id="frontend-link" href="#">打开正式界面</a><a href="/docs">API 文档</a><a href="/debug/report" download>下载诊断报告</a><button id="refresh">刷新</button></nav></header>
   <main>
     <div class="status-line"><span class="dot"></span><span id="status">正在读取服务状态…</span></div>
     <section class="metrics"><div class="metric"><span>运行中</span><strong id="active">—</strong></div><div class="metric"><span>最近失败</span><strong id="failed">—</strong></div><div class="metric"><span>历史记录</span><strong id="history-count">—</strong></div><div class="metric"><span>问题与警告</span><strong id="issue-count">—</strong></div></section>
@@ -137,6 +148,7 @@ DEBUG_PAGE = """<!doctype html>
   <script>
     const esc=value=>String(value??"").replace(/[&<>\"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
     const when=value=>value?new Date(value).toLocaleString("zh-CN"):"—";
+    document.querySelector("#frontend-link").href=`${location.protocol}//${location.hostname}:5174/`;
     function render(data){
       document.querySelector("#status").textContent=`API 正常 · 最后更新 ${when(data.generated_at)} · 每 3 秒自动刷新`;
       document.querySelector("#active").textContent=data.counts.active;
@@ -160,7 +172,7 @@ DEBUG_PAGE = """<!doctype html>
         body.innerHTML=`<div class="detail-grid">${stat("状态",job.state||history.state)}${stat("阶段",job.stage)}${stat("进度",job.progress==null?"—":`${Math.round(job.progress*100)}%`)}${stat("文件",history.file_name)}${stat("语言",history.language||"自动")}${stat("模型",history.model_location||history.model_source)}${stat("BPM",metrics.bpm)}${stat("调性",metrics.key)}${stat("歌词片段",result?.lyrics?.length??0)}</div>${job.error||history.error?`<div class="issue error">${esc(job.error||history.error)}</div>`:""}<section class="detail-section"><h3>阶段事件</h3>${events}</section><section class="detail-section"><h3>分析摘要</h3><p class="detail-copy">${esc(result?.summary||history.summary||"尚无结果")}</p></section><section class="detail-section"><h3>问题与警告</h3>${warnings}</section><section class="detail-section"><h3>乐器 / 主题</h3>${tags([...(result?.instruments||[]),...(result?.themes||[])])}</section><section class="detail-section"><h3>歌词</h3>${tags(result?.lyrics)}</section><section class="detail-section"><h3>证据（最多显示 100 条）</h3>${evidence}</section><details class="raw"><summary>查看原始 JSON</summary><pre>${esc(JSON.stringify(data,null,2))}</pre></details>`;
       }catch(error){body.innerHTML=`<div class="issue error">任务详情读取失败：${esc(error.message)}</div>`}
     }
-    async function load(){try{const response=await fetch("/debug/state",{cache:"no-store"});if(!response.ok)throw new Error(`HTTP ${response.status}`);render(await response.json())}catch(error){document.querySelector("#status").textContent=`监控数据读取失败：${error.message}`}}
+    async function load(){try{const response=await fetch("/debug/state",{cache:"no-store"});if(response.status===401)throw new Error("请先在正式界面登录");if(!response.ok)throw new Error(`HTTP ${response.status}`);render(await response.json())}catch(error){document.querySelector("#status").textContent=`监控数据读取失败：${error.message}`}}
     document.addEventListener("click",event=>{const button=event.target.closest("[data-task-id]");if(button)openTask(button.dataset.taskId)});document.querySelector("#detail-close").addEventListener("click",()=>document.querySelector("#task-detail").close());document.querySelector("#refresh").addEventListener("click",load);load();setInterval(load,3000);
   </script>
 </body>

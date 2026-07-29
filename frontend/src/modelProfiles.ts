@@ -16,13 +16,13 @@ export const MODEL_PROFILES: ModelProfile[] = [
     id: "minicpm-8005",
     name: "MiniCPM-o-4.5",
     endpoint: "http://192.168.1.97:8005",
-    note: "实验：需要 Gateway 音频接口",
+    note: "Comni Gateway 音频接口",
   },
   {
     id: "custom",
     name: "自定义",
     endpoint: "",
-    note: "其他 OpenAI 兼容地址",
+    note: "自动探测服务协议",
   },
 ];
 
