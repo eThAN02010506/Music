@@ -168,7 +168,30 @@ def test_request_conversion_uses_comni_audio_and_explicitly_disables_tts():
         ],
         "max_tokens": 8_000,
         "temperature": 3.0,
-        "response_format": {"type": "json_schema"},
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "teaching_map",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "core_expression": {"type": "string"},
+                        "start_s": {"type": "number"},
+                        "evidence_source_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": [
+                        "core_expression",
+                        "start_s",
+                        "evidence_source_ids",
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+        },
     }
 
     payload = openai_request_to_comni(request)
@@ -183,7 +206,12 @@ def test_request_conversion_uses_comni_audio_and_explicitly_disables_tts():
         "do_sample": True,
         "length_penalty": 1.0,
     }
-    audio = payload["messages"][1]["content"][1]
+    schema_message = payload["messages"][0]
+    assert schema_message["role"] == "system"
+    assert "core_expression" in schema_message["content"]
+    assert "start_s" in schema_message["content"]
+    assert "evidence_source_ids" in schema_message["content"]
+    audio = payload["messages"][2]["content"][1]
     assert audio["type"] == "audio"
     assert audio["sample_rate"] == 16_000
     np.testing.assert_allclose(

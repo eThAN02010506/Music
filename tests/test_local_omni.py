@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,7 @@ from fastapi import HTTPException
 from music_insight.adapters.local_omni import (
     LocalModelConfigurationError,
     LocalOmniServer,
+    ManagedLocalOmniAdapter,
 )
 from music_insight.api.app import get_orchestrator
 from music_insight.config import Settings
@@ -97,3 +99,32 @@ def test_local_orchestrator_reports_missing_runner_before_job(tmp_path: Path):
         get_orchestrator(settings, model_source="local", local_model_path=".")
 
     assert raised.value.status_code == 422
+
+
+def test_managed_local_adapter_starts_server_for_every_request_scope():
+    class FakeServer:
+        endpoint = "http://127.0.0.1:8011"
+
+        def __init__(self) -> None:
+            self.paths: list[str] = []
+
+        async def ensure_running(self, submitted_path: str) -> None:
+            self.paths.append(submitted_path)
+
+    server = FakeServer()
+    adapter = ManagedLocalOmniAdapter(
+        server=server,
+        model_path="Qwen-Omni.gguf",
+    )
+
+    async def exercise() -> None:
+        async with adapter._request_scope():
+            assert adapter._http_client is not None
+        assert adapter._http_client is None
+        async with adapter._request_scope():
+            assert adapter._http_client is not None
+        assert adapter._http_client is None
+
+    asyncio.run(exercise())
+
+    assert server.paths == ["Qwen-Omni.gguf", "Qwen-Omni.gguf"]

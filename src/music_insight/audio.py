@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from collections.abc import Iterator
 import wave
 
 import av
@@ -111,6 +112,58 @@ def decode_mono(
     # both a list of all decoded chunks and a second concatenated allocation.
     audio = np.frombuffer(pcm, dtype=np.float32)
     return np.nan_to_num(audio, copy=False), sample_rate
+
+
+def iter_mono_chunks(
+    path: Path,
+    sample_rate: int = 22_050,
+    *,
+    max_duration_s: float | None = None,
+) -> Iterator[np.ndarray]:
+    """Decode mono float PCM incrementally without retaining the whole track."""
+
+    decoded_samples = 0
+    max_samples = (
+        max(1, int(max_duration_s * sample_rate))
+        if max_duration_s is not None
+        else None
+    )
+    with av.open(str(path)) as container:
+        if not container.streams.audio:
+            raise ValueError(f"音频文件中没有可用音轨：{path.name}")
+        stream = container.streams.audio[0]
+        resampler = av.AudioResampler(format="fltp", layout="mono", rate=sample_rate)
+        frames = _decode_audio_frames(
+            container,
+            stream,
+            trailing_metadata_start=_trailing_apev2_start(path),
+            file_size=path.stat().st_size,
+        )
+        for frame in frames:
+            for converted in resampler.resample(frame):
+                chunk = np.asarray(
+                    converted.to_ndarray(),
+                    dtype=np.float32,
+                ).reshape(-1)
+                decoded_samples += chunk.size
+                if max_samples is not None and decoded_samples > max_samples:
+                    raise AudioDurationExceededError(
+                        f"音频超过允许的 {max_duration_s / 60:.1f} 分钟。"
+                    )
+                if chunk.size:
+                    yield np.nan_to_num(chunk, copy=False)
+        for converted in resampler.resample(None):
+            chunk = np.asarray(
+                converted.to_ndarray(),
+                dtype=np.float32,
+            ).reshape(-1)
+            decoded_samples += chunk.size
+            if max_samples is not None and decoded_samples > max_samples:
+                raise AudioDurationExceededError(
+                    f"音频超过允许的 {max_duration_s / 60:.1f} 分钟。"
+                )
+            if chunk.size:
+                yield np.nan_to_num(chunk, copy=False)
 
 
 def _decode_audio_frames(

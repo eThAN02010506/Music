@@ -23,6 +23,9 @@ importers:
       vite:
         specifier: 8.1.5
         version: 8.1.5
+      wavesurfer.js:
+        specifier: 7.12.6
+        version: 7.12.6
     devDependencies:
       '@types/react':
         specifier: 19.2.17
@@ -480,6 +483,9 @@ packages:
       yaml:
         optional: true
 
+  wavesurfer.js@7.12.6:
+    resolution: {integrity: sha512-zSxPgOFprtyJ31ppHQF0+E9jAmjAhi1rR36yIW6h1GOYdpRxDe6mbkYtlChqLK0Iz8ROBweiEFw2zus7tDFibA==}
+
 snapshots:
 
   '@emnapi/core@1.11.1':
@@ -780,3 +786,5 @@ snapshots:
       tinyglobby: 0.2.17
     optionalDependencies:
       fsevents: 2.3.3
+
+  wavesurfer.js@7.12.6: {}

@@ -204,7 +204,7 @@ export function ModelSettings({
       </summary>
       <div className="model-popover">
         <header>
-          <div><strong>模型设置</strong><small>仅影响下一次分析</small></div>
+          <div><strong>模型设置</strong><small>影响后续新分析</small></div>
           <span className={`runner-dot ${modelSource === "network" || localRunnerAvailable ? "ready" : "missing"}`} />
         </header>
         <div className="model-source-tabs" role="group" aria-label="模型来源">
@@ -237,7 +237,7 @@ export function ModelSettings({
               <small>
                 {activeProfile.id === "minicpm-8005"
                   ? "8005 使用 Comni WebSocket；服务会自动选择专用音频协议。"
-                  : "留空使用默认 8004；其他地址会自动探测 OpenAI 或专用 Gateway 协议。"}
+                  : "留空使用后端默认地址；其他地址会自动探测 OpenAI 或专用 Gateway 协议。"}
               </small>
             </label>
             <button

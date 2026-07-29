@@ -4,6 +4,7 @@ import type {
   HistoryDetail,
   HistoryRevision,
   HistorySummary,
+  HistoryWaveform,
   JobSnapshot,
   Leaderboard,
   LyricsRetryResult,
@@ -11,6 +12,12 @@ import type {
   RuntimeConfig,
   SingingAttempt,
   SingingScore,
+  ListenerProfile,
+  ListenerLevel,
+  TeachingChatRequest,
+  TeachingConversation,
+  TeachingGuideResponse,
+  TeachingMessage,
   User,
 } from "./types";
 
@@ -139,6 +146,102 @@ export const api = {
   historyRevisions: (id: string) =>
     request<HistoryRevision[]>(
       `/history/${encodeURIComponent(id)}/revisions`,
+    ),
+  historyWaveform: (id: string, signal?: AbortSignal) =>
+    request<HistoryWaveform>(
+      `/history/${encodeURIComponent(id)}/waveform`,
+      undefined,
+      { signal },
+    ),
+  listenerProfile: (signal?: AbortSignal) =>
+    request<ListenerProfile>("/listener-profile", undefined, { signal }),
+  updateListenerProfile: (
+    level: ListenerLevel,
+    preferences: Record<string, string>,
+    learned_concepts: string[],
+  ) =>
+    request<ListenerProfile>("/listener-profile", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ level, preferences, learned_concepts }),
+    }),
+  teachingGuide: (id: string, signal?: AbortSignal) =>
+    request<TeachingGuideResponse>(
+      `/history/${encodeURIComponent(id)}/teaching-guide`,
+      undefined,
+      { signal },
+    ),
+  generateTeachingGuide: (id: string, force = false) =>
+    request<TeachingGuideResponse>(
+      `/history/${encodeURIComponent(id)}/teaching-guide`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force }),
+      },
+    ),
+  teachingConversations: (id: string, signal?: AbortSignal) =>
+    request<TeachingConversation[]>(
+      `/history/${encodeURIComponent(id)}/conversations`,
+      undefined,
+      { signal },
+    ),
+  createTeachingConversation: (id: string, title?: string) =>
+    request<TeachingConversation>(
+      `/history/${encodeURIComponent(id)}/conversations`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: title || null }),
+      },
+    ),
+  teachingConversation: (
+    id: string,
+    conversationId: string,
+    signal?: AbortSignal,
+  ) =>
+    request<TeachingConversation>(
+      `/history/${encodeURIComponent(id)}/conversations/${
+        encodeURIComponent(conversationId)
+      }`,
+      undefined,
+      { signal },
+    ),
+  deleteTeachingConversation: (id: string, conversationId: string) =>
+    request<void>(
+      `/history/${encodeURIComponent(id)}/conversations/${
+        encodeURIComponent(conversationId)
+      }`,
+      { method: "DELETE" },
+    ),
+  teachingMessages: (
+    id: string,
+    conversationId: string,
+    signal?: AbortSignal,
+  ) =>
+    request<TeachingMessage[]>(
+      `/history/${encodeURIComponent(id)}/conversations/${
+        encodeURIComponent(conversationId)
+      }/messages`,
+      undefined,
+      { signal },
+    ),
+  sendTeachingMessage: (
+    id: string,
+    conversationId: string,
+    payload: TeachingChatRequest,
+    signal?: AbortSignal,
+  ) =>
+    request<TeachingMessage>(
+      `/history/${encodeURIComponent(id)}/conversations/${
+        encodeURIComponent(conversationId)
+      }/messages`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+      { signal },
     ),
   retryLyrics: (id: string, start_s: number, end_s: number) =>
     request<LyricsRetryResult>(

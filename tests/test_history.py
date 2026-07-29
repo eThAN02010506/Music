@@ -708,7 +708,7 @@ def test_v5_source_content_key_protects_current_preprocessor_cache(tmp_path):
         now=now,
     )
 
-    assert schema_version == 5
+    assert schema_version == LATEST_SCHEMA_VERSION
     assert source_row is not None
     assert source_row["kind"] == "source"
     assert source_row["content_key"] == content_key

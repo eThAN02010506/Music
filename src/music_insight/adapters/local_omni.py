@@ -1,19 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 import shutil
 
 import httpx
 
 from music_insight.adapters.qwen_omni_unified import QwenOmniUnifiedAdapter
-from music_insight.schemas import (
-    AudioAsset,
-    DspResult,
-    LyricsSegment,
-    UnifiedAudioResult,
-)
 
 
 class LocalModelConfigurationError(RuntimeError):
@@ -205,24 +200,10 @@ class ManagedLocalOmniAdapter(QwenOmniUnifiedAdapter):
         self.model_path = model_path
         self.source = f"Qwen Omni · local:{model_path}"
 
-    async def analyze(
-        self,
-        asset: AudioAsset,
-        dsp: DspResult,
-        progress: Callable[[str, float, str], Awaitable[None] | None] | None = None,
-    ) -> UnifiedAudioResult:
-        await self.server.ensure_running(self.model_path)
-        return await super().analyze(asset, dsp, progress=progress)
+    @asynccontextmanager
+    async def _request_scope(self) -> AsyncIterator[None]:
+        """Start the selected local model for every inherited workflow."""
 
-    async def retry_lyrics(
-        self,
-        audio_bytes: bytes,
-        duration_s: float,
-        language_hint: str | None,
-    ) -> tuple[list[LyricsSegment], list[str]]:
         await self.server.ensure_running(self.model_path)
-        return await super().retry_lyrics(
-            audio_bytes,
-            duration_s,
-            language_hint,
-        )
+        async with super()._request_scope():
+            yield

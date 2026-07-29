@@ -74,10 +74,13 @@ PYTHONPATH=src uvicorn music_insight.api.app:app \
 每台 Worker：
 
 ```bash
-MUSIC_INSIGHT_WORKER_CONCURRENCY=1 music-insight-worker
+PYTHONPATH=src MUSIC_INSIGHT_WORKER_CONCURRENCY=1 \
+  .venv/bin/python -m music_insight.worker
 ```
 
-也可以直接使用 Celery CLI：
+安装 wheel 并激活对应虚拟环境后，也可以使用入口命令
+`MUSIC_INSIGHT_WORKER_CONCURRENCY=1 music-insight-worker`。或者直接使用
+Celery CLI：
 
 ```bash
 PYTHONPATH=src celery \
@@ -92,6 +95,16 @@ PYTHONPATH=src celery \
 3. 能访问配置的局域网模型地址；Worker 会自动探测 OpenAI 音频或 Comni
    Gateway 协议，因此每台 Worker 到模型服务的网络路径必须一致。
 4. 若使用 `model_source=local`，还要安装 `llama-server` 并挂载相同模型路径。
+
+`MUSIC_INSIGHT_WORKER_CONCURRENCY=1` 只限制一个 Worker 进程。启动 N 个 Worker
+时，同一个模型端点仍可能同时收到 N 个请求；Redis Lua 容量限制管理的是活动
+任务总数，不是模型端点信号量。共享单卡模型时应先只运行一个目标队列 Worker，
+或在部署层增加按端点的 Redis 全局信号量/独立队列，再逐步压测扩容。
+
+标准化音频缓存在每个 Worker 的 `MUSIC_INSIGHT_WORKSPACE_DIR/normalized/`。
+API 启动时的资产 GC 不会扫描远程 Worker 的本地磁盘，因此该目录应使用
+可回收的临时卷，或由部署系统按 `MUSIC_INSIGHT_ASSET_GC_GRACE_HOURS` 等保留
+策略周期清理。
 
 已启动 Redis 和至少一个 Worker 后，可执行不调用真实模型的跨进程烟雾测试：
 
@@ -109,6 +122,8 @@ PYTHONPATH=src python scripts/redis_celery_smoke.py
   同时启用 late ACK、`reject_on_worker_lost` 和预取 1；Worker 异常退出时
   任务由 broker 重新投递。
 - Redis Lua 脚本同时执行全局和每用户容量预留，多个 API 进程不能绕过上限。
+- 上述容量预留不等于模型端点的全局并发门；多个 Worker 的进程内模型 gate
+  相互独立。
 - 排队任务取消会立即释放容量；运行任务在下一个进度检查点协作取消。外部模型
   请求已经开始后不会被强制杀死，以免留下损坏缓存或不一致结果。
 - Worker 不写 SQLite。Redis 终态在 API 恢复后会再次协调；只要恢复发生在

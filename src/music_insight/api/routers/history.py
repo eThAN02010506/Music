@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -13,6 +13,7 @@ from music_insight.api.contracts.history import (
     HistoryRename,
     HistoryRevision,
     HistorySummary,
+    HistoryWaveform,
 )
 from music_insight.api.dependencies import (
     get_current_user,
@@ -27,6 +28,7 @@ from music_insight.api.services.history import (
     retry_lyrics,
     revise_lyrics,
 )
+from music_insight.api.services.waveform import load_waveform
 from music_insight.config import Settings, get_settings
 
 
@@ -173,3 +175,38 @@ async def get_history_audio(
     if path is None:
         raise HTTPException(status_code=404, detail="Cached audio not found.")
     return FileResponse(path, filename=path.name)
+
+
+@router.get(
+    "/{history_id}/waveform",
+    response_model=HistoryWaveform,
+)
+async def get_history_waveform(
+    request: Request,
+    response: Response,
+    history_id: str,
+    points: int = Query(default=1_200, ge=100, le=4_000),
+    settings: Settings = Depends(get_settings),
+    history: HistoryStore = Depends(get_history_store),
+    user: UserPublic = Depends(get_current_user),
+) -> HistoryWaveform:
+    path = await run_in_threadpool(
+        history.audio_path,
+        history_id,
+        user_id=user.id,
+    )
+    if path is None:
+        raise HTTPException(status_code=404, detail="Cached audio not found.")
+    try:
+        async with request.app.state.direct_work_limiter.lease(user.id):
+            async with request.app.state.local_compute_gate:
+                waveform = await run_in_threadpool(
+                    load_waveform,
+                    path,
+                    points=points,
+                    max_duration_s=settings.max_audio_minutes * 60,
+                )
+                response.headers["Cache-Control"] = "private, no-store"
+                return waveform
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)[:500]) from exc

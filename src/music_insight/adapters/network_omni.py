@@ -25,6 +25,18 @@ from music_insight.schemas import (
     LyricsSegment,
     UnifiedAudioResult,
 )
+from music_insight.teaching.models import (
+    MapGenerationContext,
+    MusicUnderstandingMap,
+    RelistenRequest,
+    RelistenResult,
+    TeachingChatContext,
+    TeachingChatResponse,
+)
+from music_insight.teaching.protocols import (
+    TeachingModelAdapter,
+    TeachingRelistenProvider,
+)
 
 
 ProviderBuilder: TypeAlias = Callable[
@@ -149,6 +161,33 @@ class NetworkOmniAdapter(UnifiedAudioAdapter):
             duration_s,
             language_hint,
         )
+
+    async def build_understanding_map(
+        self,
+        context: MapGenerationContext,
+    ) -> MusicUnderstandingMap:
+        adapter = await self._resolve()
+        if not isinstance(adapter, TeachingModelAdapter):
+            raise RuntimeError("当前模型协议不支持结构化音乐导赏。")
+        return await adapter.build_understanding_map(context)
+
+    async def answer_music_question(
+        self,
+        context: TeachingChatContext,
+    ) -> TeachingChatResponse:
+        adapter = await self._resolve()
+        if not isinstance(adapter, TeachingModelAdapter):
+            raise RuntimeError("当前模型协议不支持交互式音乐导赏问答。")
+        return await adapter.answer_music_question(context)
+
+    async def listen_to_excerpts(
+        self,
+        request: RelistenRequest,
+    ) -> RelistenResult:
+        adapter = await self._resolve()
+        if not isinstance(adapter, TeachingRelistenProvider):
+            raise RuntimeError("当前模型协议不支持局部音频重听。")
+        return await adapter.listen_to_excerpts(request)
 
     async def _resolve(self) -> UnifiedAudioAdapter:
         if self._delegate is not None:

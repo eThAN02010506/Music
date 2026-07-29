@@ -112,6 +112,12 @@ export interface HistoryRevision {
   lyrics: LyricsSegment[];
 }
 
+export interface HistoryWaveform {
+  duration_s: number;
+  peaks: number[][];
+  points_per_channel: number;
+}
+
 export interface LyricsRetryResult {
   start_s: number;
   end_s: number;
@@ -176,4 +182,200 @@ export interface SingingAttempt {
   performance_name: string | null;
   created_at: string;
   score: SingingScore;
+}
+
+export type AudioDimension =
+  | "melody"
+  | "harmony"
+  | "rhythm"
+  | "timbre"
+  | "dynamics"
+  | "instrumentation"
+  | "space"
+  | "lyrics"
+  | "structure"
+  | "other";
+
+export type EvidenceClaimType =
+  | "observed_fact"
+  | "computed_fact"
+  | "grounded_interpretation"
+  | "possible_reading";
+
+export interface AnalysisEvidenceRef {
+  source_type:
+    | "analysis_evidence"
+    | "lyrics"
+    | "metric"
+    | "understanding_event"
+    | "relisten";
+  source_id: string;
+  dimension: AudioDimension;
+  statement: string;
+  claim_type: EvidenceClaimType;
+  span: Span | null;
+  confidence: number | null;
+}
+
+export interface LyricsContext {
+  source_id: string;
+  text: string;
+  span: Span | null;
+  language: string | null;
+  confidence: number | null;
+}
+
+export interface SectionMarker {
+  id: string;
+  label: string;
+  span: Span;
+  expressive_role: string;
+  confidence: number;
+  alternative_labels: string[];
+}
+
+export interface EmotionalArcPoint {
+  span: Span;
+  description: string;
+  evidence_refs: AnalysisEvidenceRef[];
+  confidence: number;
+}
+
+export interface UnderstandingEvent {
+  id: string;
+  start_s: number;
+  end_s: number;
+  section: string;
+  observation: string;
+  interpretation: string;
+  expressive_role: string;
+  audio_evidence: AnalysisEvidenceRef[];
+  lyrics_context: LyricsContext[];
+  listening_task: string;
+  alternative_readings: string[];
+  confidence: number;
+}
+
+export interface KeyMoment {
+  id: string;
+  event_id: string;
+  start_s: number;
+  end_s: number;
+  reason: string;
+  listening_task: string;
+  confidence: number;
+}
+
+export interface MusicUnderstandingMap {
+  schema_version: number;
+  core_expression: string;
+  overall_atmosphere: string;
+  emotional_arc: EmotionalArcPoint[];
+  sections: SectionMarker[];
+  events: UnderstandingEvent[];
+  key_moments: KeyMoment[];
+  confidence: number;
+  warnings: string[];
+  generated_at: string;
+}
+
+export interface AnswerTimeRange {
+  id: string;
+  start_s: number;
+  end_s: number;
+  label: string;
+  purpose: string;
+}
+
+export interface AnswerEvidence {
+  id: string;
+  statement: string;
+  claim_type: EvidenceClaimType;
+  dimension: AudioDimension;
+  source_refs: string[];
+  time_range_ids: string[];
+  confidence: number;
+}
+
+export interface TeachingListeningTask {
+  instruction: string;
+  focus: AudioDimension;
+  time_range_id: string;
+}
+
+export interface TeachingPlayerAction {
+  type: "seek" | "play_range" | "loop_range" | "compare_ab";
+  time_range_id: string;
+  comparison_time_range_id: string | null;
+  label: string;
+}
+
+export interface TeachingChatResponse {
+  answer: string;
+  time_ranges: AnswerTimeRange[];
+  evidence: AnswerEvidence[];
+  listening_task: TeachingListeningTask;
+  suggested_questions: string[];
+  player_actions: TeachingPlayerAction[];
+  alternative_readings: string[];
+  warnings: string[];
+  confidence: number;
+  relistened: boolean;
+  insufficient_evidence: boolean;
+}
+
+export type ListenerLevel =
+  | "beginner"
+  | "curious"
+  | "intermediate"
+  | "advanced";
+
+export interface ListenerProfile {
+  level: ListenerLevel;
+  preferences: Record<string, string>;
+  learned_concepts: string[];
+}
+
+export interface TeachingGuideResponse {
+  analysis_id: string;
+  schema_version: number;
+  source_result_hash: string;
+  status: "pending" | "complete" | "stale" | "failed";
+  understanding_map: MusicUnderstandingMap | null;
+  stale: boolean;
+  cached: boolean;
+  error: string | null;
+  updated_at: string | null;
+}
+
+export interface TeachingConversation {
+  id: string;
+  analysis_id: string;
+  title: string | null;
+  summary: string | null;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TeachingChatRequest {
+  client_request_id: string;
+  message: string;
+  current_time_s: number;
+  selected_range: Span | null;
+  compare_ranges: Span[];
+  relisten_policy: "never" | "auto" | "always";
+}
+
+export interface TeachingMessage {
+  id: string;
+  conversation_id: string;
+  sequence: number;
+  status: "pending" | "complete" | "failed";
+  client_request_id: string;
+  request: TeachingChatRequest;
+  response: TeachingChatResponse | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
 }

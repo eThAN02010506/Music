@@ -56,3 +56,9 @@ class HistoryLyricsRetryResult(BaseModel):
     lyrics: list[LyricsSegment]
     issues: list[str] = Field(default_factory=list)
     source: str
+
+
+class HistoryWaveform(BaseModel):
+    duration_s: float = Field(gt=0)
+    peaks: list[list[float]] = Field(min_length=1, max_length=2)
+    points_per_channel: int = Field(ge=2, le=8_000)

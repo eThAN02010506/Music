@@ -1,17 +1,117 @@
 # Music Insight
 
-演唱音乐分析应用。默认模型服务：
+Music Insight 是一个本地优先、证据驱动的音乐理解与演唱练习应用。用户上传
+歌曲后，可以获得声学分析、歌词与声音证据、结构化音乐导赏，并在同一个
+播放器旁就具体时间段持续追问；也可以上传或录制自己的演唱，与参考音频做
+本地声学评分。
 
-- Qwen3-Omni 音频理解：`http://192.168.1.97:8004/v1/chat/completions`
-- MiniCPM-o 4.5 Comni Gateway：`ws://192.168.1.97:8005/ws/chat`
-- 本地 Qwen2.5-Omni-3B Q8 权重位于 `src/model/`，可作为离线后备
+核心能力：
 
-正式界面使用 React + TypeScript + Vite，FastAPI 提供异步任务与 SSE
-进度流；Streamlit 仅保留为调试台。正式界面支持多个持久化分析、重命名、
-删除和双结果对比，并提供本地账号、用户独立历史与演唱最高分排行榜。
-模型权重、上传缓存和本地测试音频不会提交到 Git。
+- 歌词、乐器/声源、声音事件、情绪线索、BPM、调性和声学能量分析；
+- 结构化“音乐理解地图”：从听觉事实到表达解释、段落作用与复听任务；
+- 边听边问、当前 15 秒解释、波形框选、A/B 片段比较和同步歌词；
+- 多账号隔离的历史、歌曲级多对话、结果对比、歌词校对与版本回溯；
+- 参考音频与个人演唱的本地 DSP 评分、服务端留存和娱乐排行榜；
+- OpenAI `input_audio`、MiniCPM-o Comni 和本地 GGUF Provider；
+- 内存任务模式，以及可选的 Redis/Celery 跨进程分析 Worker。
 
-处理流水线：
+正式界面使用 React + TypeScript + Vite，FastAPI 提供认证、异步任务、
+SSE 进度、历史和导赏 API；Streamlit 只保留为兼容调试台。模型权重、
+运行时缓存和 `test_samples/` 中的本地测试音频由 `.gitignore` 排除；放在
+项目根目录等其他位置的个人媒体文件仍应避免加入 Git。
+
+文档导航：
+[快速开始](#快速开始) ·
+[使用流程](#使用流程) ·
+[架构](#架构概览) ·
+[导赏老师](#可交互音乐导赏老师) ·
+[局域网运行](#运行方式与局域网) ·
+[API](#api) ·
+[配置](#配置) ·
+[常见问题](#常见问题) ·
+[验证](#验证)
+
+## 快速开始
+
+环境要求：
+
+- Python 3.11 或更高版本；
+- Node.js `>=22.12.0`，以及 pnpm；
+- 完整歌词、情绪与导赏能力需要至少一个可访问的音频模型服务；没有模型时
+  仍可启动应用并验证界面和 DSP 降级链路；
+- 本地 GGUF 模式额外需要支持音频投影的 `llama-server`。
+
+在项目根目录安装并启动后端：
+
+```bash
+python -m venv .venv
+.venv/bin/pip install ".[dev]"
+PYTHONPATH=src .venv/bin/python -m uvicorn \
+  music_insight.api.app:app --host 127.0.0.1 --port 8000
+```
+
+另开终端启动正式前端：
+
+```bash
+cd frontend
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+然后打开：
+
+- 正式界面：`http://127.0.0.1:5174/`
+- API、Debug Console：`http://127.0.0.1:8000/`
+- OpenAPI 文档：`http://127.0.0.1:8000/docs`
+
+首次使用时在正式界面创建本地账号。上传歌曲并完成分析后，打开左侧历史项，
+点击“生成教学式导赏”即可进入音乐理解地图和边听边问；模型地址和本地权重
+路径在页面右上角“模型设置”中选择。设置会用于之后新建的分析，直到再次
+修改或退出账号；不会改变正在运行的任务或已有结果。
+
+当前代码内置以下模型预设，它们不是运行整个应用的硬依赖：
+
+- Qwen3-Omni 音频理解：`http://192.168.1.97:8004`
+- MiniCPM-o 4.5 Comni Gateway：`http://192.168.1.97:8005`
+- 本地 Qwen2.5-Omni-3B Q8 GGUF：放入权重后默认从 `src/model/` 查找
+
+`8004` 与 `8005` 是当前局域网示例地址；换一台机器部署时应通过页面或
+`MUSIC_INSIGHT_OMNI_ENDPOINT` 改成实际地址。导赏地图和后续对话会恢复该
+歌曲分析时保存的 Provider，不会在聊天请求中接受一个新的任意模型 URL。
+模型权重不会随 Git 仓库分发，因此全新 clone 在未配置网络 Provider 或自行
+放入 GGUF 前，只能稳定复现界面、账户、DSP 和保守降级路径。
+
+## 使用流程
+
+1. 创建或登录本地账号；分析、对话和服务端评分记录均按账号隔离。
+2. 在右上角“模型设置”选择预设、自定义私有地址或本地 GGUF。网络 Provider
+   可以先执行连接测试，该测试只探测能力、不发送音频；本地权重会在创建任务
+   时校验路径与 `llama-server`。
+3. 上传歌曲并等待 SSE 进度完成。模型失败时页面仍会保留可用的 DSP 结果和
+   明确警告。
+4. 从左侧历史打开歌曲，检查报告与歌词时间轴；必要时校对歌词或定向重听。
+5. 生成教学式导赏，点击地图时间范围复听，或使用“解释当前 15 秒”直接提问。
+   要比较两段时，先框选片段并分别“设为 A”“设为 B”；“连续播放 A→B”
+   用于听辨，再选择“比较 A/B”并提交问题。
+6. 上传或录制个人演唱，查看音准、节奏、完整度、稳定性和对齐误差。
+
+## 架构概览
+
+```mermaid
+flowchart LR
+    UI["React / Vite<br/>播放器与导赏"] -->|"/api 同源代理"| API["FastAPI<br/>认证、历史、导赏"]
+    API --> DB["SQLite<br/>账号、历史、对话"]
+    API --> FS["受管音频目录"]
+    API --> DSP["librosa / PyAV<br/>DSP 与波形"]
+    API --> JOBS{"任务后端"}
+    JOBS --> MEM["单进程内存队列"]
+    JOBS --> REDIS["Redis + Celery<br/>跨机器 Worker"]
+    MEM --> PROVIDER["统一 Provider 适配层"]
+    REDIS --> PROVIDER
+    PROVIDER --> MODEL["OpenAI 音频 / Comni / 本地 GGUF"]
+```
+
+### 分析流水线
 
 1. 预处理生成 16 kHz 单声道 WAV。
 2. 本地 librosa 计算整首能量曲线，并从均匀覆盖全曲、具有固定内存上限的
@@ -19,7 +119,8 @@
 3. OpenAI 音频协议默认按 30 秒切块，Comni Gateway 默认按 15 秒切块；
    相邻块保留 1.5 秒重叠后依次提交给统一模型；
    重叠区歌词按时间中点归属单个分块，兼顾边界上下文和去重。同一模型地址
-   默认只运行一个分析任务，其他任务等待模型资源，避免长音频互相争抢。
+   在单个 API 或 Worker 进程内默认只运行一个分析任务，其他任务等待模型
+   资源；多个分布式 Worker 之间目前没有全局端点信号量。
 4. 模型每块同时提取歌词、乐器/声源、声音事件、人声情绪和局部描述。
 5. 时间戳转换成整首音乐坐标，并裁剪或丢弃越界事件。
 6. 所有分块完成后，再由同一个模型根据分块证据和 DSP 生成最终报告。
@@ -27,7 +128,7 @@
 
 某个音频分块失败不会丢失其他分块；若统一模型整体不可用，仍返回本地 DSP 结果并在 `warnings` 中说明降级。
 
-可靠性策略：
+### 可靠性与证据边界
 
 - OpenAI 兼容 Provider 优先使用 JSON Schema，服务不支持时回退到 JSON
   object；Comni Provider 使用严格提示和一次有界 JSON 修复，不伪装成
@@ -52,22 +153,51 @@
   多台机器；历史删除也会同步清理相应任务状态。
 - 默认最多接收 8 个活动任务、每个用户最多 3 个；内存模式按进程限制，
   Redis 模式使用 Lua 原子脚本执行全局限制，多个提交进程不能绕过容量。
-- 同步分析、歌词重听和演唱评分最多同时执行 2 个、每用户 1 个；音频预处理、
-  DSP 与演唱特征提取共享最多 2 个本地计算槽。取消请求会先等待无法中止的
-  工作线程结算再释放槽位，避免用反复取消绕过内存上限。
+- 同步分析、歌词重听、导赏生成/问答、波形生成和演唱评分共享直接工作限制：
+  最多同时执行 2 个、每用户 1 个；音频预处理、DSP 与演唱特征提取另共享
+  最多 2 个本地计算槽。取消请求会先等待无法中止的工作线程结算再释放槽位，
+  避免用反复取消绕过内存上限。
 - SQLite 使用带版本号的幂等迁移；升级旧数据库前自动保留
   `history.pre-v*.sqlite3.bak`，迁移失败会回滚。
+- 导赏地图和对话采用“短事务预留 → 关闭事务 → 模型推理 → 短事务发布”
+  的三段式写入，模型调用不会占用 SQLite 的写锁。重复问题使用
+  `client_request_id` 幂等去重，服务重启会结算遗留的 pending 状态。
+- 所有导赏模型输出先经过严格 Pydantic/JSON Schema 形状校验；事件、情绪
+  弧线和问答中的结构化证据还会验证证据 ID、时间重叠、歌曲时长和播放器
+  动作引用。不合格输出会降级为保守的本地证据答案，基础歌曲分析不会因此
+  失败。概览和段落作用仍属于开放解释，系统不会声称已经对每个自然语言词句
+  做语义蕴含证明。
 - 密码使用 OWASP 推荐参数档位的带随机盐 scrypt 保存，重型 KDF 同时最多
   执行 4 个；浏览器只持有 HttpOnly 会话 Cookie，
   SQLite 中只保存会话令牌摘要。历史、任务、SSE、音频和调试报告均由后端
   按当前用户校验，前端不会提交或信任 `user_id`。
 
+## 安全、隐私与数据生命周期
+
+“本地优先”指账号、历史、DSP、播放器和持久化均由自有 FastAPI 工作区管理，
+不代表配置网络 Provider 后音频绝不离开本机：
+
+- 网络 Provider 会接收标准化后的音频分块，以及综合/导赏所需的歌词和结构化
+  证据提示；选择本地 GGUF 才能让这些模型请求留在后端本机。
+- `.music_insight/` 中的 SQLite、上传音频、派生缓存和诊断信息没有应用层
+  静态加密。应依赖受控主机权限和磁盘加密，不要把工作区放在公开共享目录。
+- 历史删除会删除当前记录和受管原始音频，派生缓存由安全 GC 延迟回收；但
+  `history.pre-v*.sqlite3.bak` 迁移备份可能继续保留删除前的数据，需要由
+  管理员按备份保留策略单独保护或清理。
+- 独立演唱对比的临时上传会在请求结束后删除；评分记录仍保存在 SQLite。
+  排行榜会向已登录用户展示用户名、最高分、分项分数和尝试次数。
+- 注册接口默认对能够访问 API 的客户端开放。局域网或生产部署应通过防火墙、
+  反向代理和 HTTPS 限制访问范围，Redis 与模型端口也不应暴露到公网。
+- 当前仓库没有声明开源许可证，应按本地/内部项目处理；公开分发前需要由
+  项目所有者选择 LICENSE，并补充安全报告和贡献流程。
+
 ## 当前能力与限制
 
 - 已验证 30 秒和约 4–5 分钟的中文、英文音频可完成上传、DSP、分块分析、
   证据融合和页面展示；默认接受的单文件上限是 128 MB 且最长 20 分钟。
-- 长音频默认按 30 秒串行处理。页面会显示当前分块序号、总分块数和最近一块
-  的耗时；约 4–5 分钟音频仍可能需要数分钟。
+- 长音频按 Provider 串行分块：OpenAI 音频协议默认 30 秒，Comni 默认
+  15 秒。页面会显示当前分块序号、总分块数和最近一块的耗时；约 4–5 分钟
+  音频仍可能需要数分钟。
 - WAV 是当前最稳定的输入格式。MP3、FLAC、M4A、OGG 等格式依赖 PyAV
   解码；少数带有损坏或非 UTF-8 元数据的文件可能标准化失败，建议先转换为
   16 kHz、单声道、16-bit PCM WAV。
@@ -80,7 +210,8 @@
   tempogram 支持时，界面优先显示更接近人类拍点感知的半速值，并保留原始
   倍频候选供核查。
 - 默认模型仍为 `192.168.1.97:8004`。每次新分析可以在“模型设置”中改用
-  其他局域网模型地址，或选择后端本机的 GGUF 权重；选择只影响该次任务。
+  其他局域网模型地址，或选择后端本机的 GGUF 权重；该选择会复用于后续新
+  任务，但不会重写已经保存的分析。
 - 网络模型通过能力探测和 Provider 注册表接入，不按端口或模型名称猜协议。
   当前内置 OpenAI `input_audio` Provider（适用于 Qwen 等兼容服务）和
   MiniCPM-o Comni `/ws/chat` Provider；后续模型只需注册新的协议适配器，
@@ -88,9 +219,9 @@
 - 8005 的 OpenAI 路由虽然声明 `audio:false`，但 Comni Turn-based Gateway
   可接收 16 kHz 单声道 Float32 PCM。客户端会明确发送
   `tts.enabled=false`，并丢弃服务端意外返回的音频数据。
-- 模型设置中的“测试模型连接”只读取 `/health`、`/api/apps`、`/v1/models`
-  和 `/props`，不会发送音频或创建推理任务。页面分别显示选中的协议、
-  综合分析能力和 OpenAI 路由的音频状态。
+- 模型设置中的“测试模型连接”只读取 `/health`、`/api/apps`、`/version`、
+  `/v1/models` 和 `/props`，不会发送音频或创建推理任务。页面分别显示选中
+  的协议、综合分析能力和 OpenAI 路由的音频状态。
 - Comni 当前仍属于实验 Provider：默认单并发、15 秒分块，局域网 8005 的
   首次响应可能明显慢于 8004。客户端超时会关闭 WebSocket，但上游 Gateway
   对仍在 FIFO 队列中的请求不保证立即取消。
@@ -99,11 +230,58 @@
   `127.0.0.1:8011` 启动服务。运行器缺失或路径无效时创建任务会明确报错，
   不会悄悄回退到局域网模型。
 
+## 可交互音乐导赏老师
+
+对一个已保存的歌曲分析点击“生成教学式导赏”后，系统会额外保存版本化的
+`MusicUnderstandingMap`，而不是把 Markdown 当成唯一数据源。地图包括：
+
+- 一句话核心表达、整体意境，以及证据充足时才生成的情绪弧线；
+- 带时间范围的段落标记和最多五个关键复听时刻；证据稀疏时可以少于三个，
+  不会为了凑数量制造结论；
+- 每个理解节点的听觉事实、开放解释、表达作用、附近歌词、具体复听任务、
+  其他可能理解与支持度；
+- 对原分析证据 ID 的稳定引用。歌词或基础结果修改后，旧地图会自动标记
+  `stale`，页面提示按最新证据重建。
+
+地图 Schema 当前为 v2，核心时间事件使用以下稳定字段：
+
+```text
+start_s, end_s, section, observation, interpretation,
+expressive_role, audio_evidence, lyrics_context, listening_task,
+alternative_readings, confidence
+```
+
+播放器与导赏共享同一个 HTML 音频元素和同一播放时钟。后端按需流式解码并
+生成有界波形 peaks，响应按用户鉴权且使用私有 `no-store` 缓存策略；前端用
+WaveSurfer Regions 支持最多 30 秒框选、段落标记、点击时间跳转、选区循环和
+A/B 片段。歌词跟随同一个时钟高亮。模型返回的播放器动作只会被解析成白名单
+动作，并且必须由用户点击后才执行。
+
+“边听边问”自动提交歌曲 ID、当前位置、用户选区或 A/B 范围；附近歌词、
+地图节点和分析证据由服务端按时间检索，浏览器不会自行拼接或声称证据。
+回答返回 `answer`、可点击 `time_ranges`、结构化 `evidence`、立即可做的
+`listening_task`、`suggested_questions`、`player_actions`、
+`alternative_readings`、`confidence`，并明确标记 `relistened` 和
+`insufficient_evidence`。每首歌曲可以建立多个独立对话，记录按账号隔离并
+可删除；用户还可选择自己的音乐基础，让模型调整解释深度。
+
+默认不会在每次问答时重新分析整首歌曲。正式界面的 `auto` 策略只在框选/
+A/B 范围或问题附近证据不足时，尝试对最多两个、每段不超过 30 秒的片段做
+一次局部重听；API 客户端可以显式使用 `relisten_policy=always` 强制尝试。
+Provider 不支持时会明确降级到已保存证据。当前尚未提供人声、鼓、低音等
+分轨独听/静音，也还没有把已掌握概念串成长期课程，这两项属于后续阶段。
+
+导赏模型并发门当前是单个 API 进程内的资源限制；分析任务已经支持
+Redis/Celery 横向扩展，但若要同时运行多个 API 进程或多台导赏服务器，还应
+增加 Redis 全局信号量或将导赏推理也提交到统一任务队列，避免多个进程共同
+压满同一个模型端点。
+
 ## 历史、缓存与对比
 
 - 首次打开正式界面需要创建本地账号。每个账号只能看到自己的分析、缓存音频
-  和演唱记录；退出或切换账号时前端会卸载当前工作区并清空内存状态，其他
-  浏览器标签页也会立即重新校验账号，避免混用两个用户的数据。
+  和歌曲对话；评分记录也按账号保存，但前端目前只展示本次评分和聚合排行榜，
+  尚未提供个人尝试历史列表。退出或切换账号时前端会卸载当前工作区并清空
+  内存状态，其他浏览器标签页也会立即重新校验账号，避免混用两个用户的数据。
 - 从旧版本升级时，在运行服务的本机创建的第一个账号会自动认领原有无归属
   历史。也可登录后在本机调用 `POST /auth/claim-legacy` 进行一次性认领；
   局域网远端账号不能认领旧数据。
@@ -115,7 +293,9 @@
   保留期的安全 GC 回收，避免误删仍被其他分析使用的内容。
 - 服务启动时会先扫描上传、标准化音频、旧 stems 和崩溃遗留的临时评分文件，
   完成安全 GC 后才接受请求；只删除超过保留期且不再被历史引用的文件。GC
-  失败会记录到 Debug Console，但不会阻止服务继续启动。
+  失败会记录到 Debug Console，但不会阻止服务继续启动。该启动 GC 只管理
+  API 节点的 `MUSIC_INSIGHT_WORKSPACE_DIR`；远程 Celery Worker 的本地
+  `normalized/` 缓存应放在临时卷或另行配置周期清理。
 - 已完成结果可以在歌词时间轴中人工修改文本和起止秒数。每次保存都会先把
   旧结果归档到 `analysis_revisions`，页面可切换查看修订前版本；模型自动
   重听过的分块会显示异常原因以及初次、重听结果。
@@ -135,35 +315,37 @@
 - 勾选两个已完成项目后可并排比较 BPM、调性、歌词数量、乐器、主题、直接
   情绪、推断氛围和摘要。
 
-## 运行
+## 运行方式与局域网
+
+### 局域网开发模式
+
+Vite 已固定监听 `0.0.0.0:5174`，并把同源 `/api` 请求代理到本机
+`127.0.0.1:8000`。FastAPI 还会验证写请求的浏览器 Origin，因此局域网运行时
+需要把前端的实际 Origin 加入白名单，并让后端监听所有网卡。下面的
+`192.168.1.16` 只是示例，请替换为运行本项目机器的当前局域网 IP：
 
 ```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install ".[dev]"
-PYTHONPATH=src uvicorn music_insight.api.app:app --host 127.0.0.1 --port 8000
+export MUSIC_INSIGHT_WEB_ORIGINS=http://192.168.1.16:5174
+PYTHONPATH=src .venv/bin/python -m uvicorn \
+  music_insight.api.app:app --host 0.0.0.0 --port 8000
 ```
 
-另开终端启动 React 正式前端：
+另开终端：
 
 ```bash
 cd frontend
-pnpm install
 pnpm dev
 ```
 
-访问：`http://127.0.0.1:5174`
+同一局域网中的用户访问 `http://192.168.1.16:5174/`。模型请求由 API 或
+Celery Worker 发出，浏览器不需要直接访问 `8004`、`8005` 等模型端口。
 
-开发前端默认通过同源 `/api` 代理访问本机 `8000` 后端，因此浏览器只需连接
-`5174`，不会直接跨端口请求 API。若要供局域网其他设备使用，仍应把实际前端
-Origin 加入后端白名单；纯 HTTP 局域网无法保护密码、Cookie 或上传的录音，
-正式部署应使用 HTTPS 反向代理：
+纯 HTTP 局域网不能保护密码、Cookie 或上传录音在传输过程中的机密性。需要
+跨不可信网络或正式部署时，应在前端与 API 之前配置 HTTPS 反向代理。浏览器
+麦克风 `getUserMedia()` 也只在 HTTPS 或本机 `localhost` 等安全上下文可用；
+通过 `http://192.168.*` 访问的远程用户应改为上传录音文件。
 
-```bash
-export MUSIC_INSIGHT_WEB_ORIGINS=http://192.168.1.97:5174
-PYTHONPATH=src uvicorn music_insight.api.app:app --host 0.0.0.0 --port 8000
-cd frontend && pnpm dev
-```
+### Debug Console
 
 FastAPI 根地址 `http://127.0.0.1:8000/` 是开发监控台，可实时查看任务阶段、
 进度、最近历史、失败原因和分析警告，并可下载 JSON 诊断报告。点击任一任务
@@ -171,7 +353,9 @@ FastAPI 根地址 `http://127.0.0.1:8000/` 是开发监控台，可实时查看�
 监控数据按当前浏览器已登录账号隔离；未登录时应先在正式界面登录。原服务
 信息 JSON 位于 `/api/info`，交互式 API 文档位于 `/docs`。
 
-Streamlit 保留为调试台：
+### Streamlit 兼容调试台
+
+Streamlit 不再是正式产品界面，仅保留用于兼容旧调试流程：
 
 ```bash
 PYTHONPATH=src streamlit run src/music_insight/ui/streamlit_app.py --server.port 8501
@@ -184,8 +368,9 @@ Streamlit 调试台也需要填写已在正式界面创建的本地账号和密�
 
 ## API
 
-公开接口只有 `/health`、`/api/info`、API 文档、`/auth/register` 和
-`/auth/login`；`/auth/logout` 可匿名幂等调用。`/auth/me`、
+公开数据接口只有 `/health`、`/api/info`、API 文档、`/auth/register` 和
+`/auth/login`；根路径 `/` 会公开返回 Debug Console 的 HTML 外壳，但其中
+的任务和诊断数据仍要求登录。`/auth/logout` 可匿名幂等调用。`/auth/me`、
 `/auth/claim-legacy` 以及其他业务与调试接口均需要会话 Cookie。命令行可
 使用 cookie jar：
 
@@ -203,7 +388,7 @@ curl -b /tmp/music-insight.cookies \
 
 歌词语言支持：`zh`、`en`；不传则自动判断。
 
-正式前端使用后台任务接口：
+主要及配套 API：
 
 ```text
 POST /auth/register
@@ -216,13 +401,26 @@ GET  /jobs/{id}
 GET  /jobs/{id}/events
 GET  /jobs/{id}/result
 POST /jobs/{id}/cancel
+POST /analyze                         # 同步兼容接口
+POST /analyze/markdown                # 同步 Markdown 兼容接口
 GET  /history
 GET  /history/{id}
 GET  /history/{id}/audio
+GET  /history/{id}/waveform
 PATCH /history/{id}
 PATCH /history/{id}/lyrics
 POST  /history/{id}/lyrics/retry
 GET  /history/{id}/revisions
+GET  /listener-profile
+PUT  /listener-profile
+GET  /history/{id}/teaching-guide
+POST /history/{id}/teaching-guide
+GET  /history/{id}/conversations
+POST /history/{id}/conversations
+GET  /history/{id}/conversations/{conversation_id}
+DELETE /history/{id}/conversations/{conversation_id}
+GET  /history/{id}/conversations/{conversation_id}/messages
+POST /history/{id}/conversations/{conversation_id}/messages
 POST /history/{id}/singing/score
 POST /singing/compare
 GET  /singing/attempts
@@ -244,7 +442,7 @@ GET  /runtime-config
 
 ```text
 model_source=network | local
-model_endpoint=http://host:port       # network 模式；留空使用默认 8004
+model_endpoint=http://host:port       # network；留空使用 MUSIC_INSIGHT_OMNI_ENDPOINT
 local_model_path=/allowed/path        # local 模式；目录或主 GGUF 文件
 ```
 
@@ -266,12 +464,16 @@ export MUSIC_INSIGHT_JOB_BACKEND=memory
 # export MUSIC_INSIGHT_REDIS_JOB_TTL_SECONDS=604800
 # export MUSIC_INSIGHT_CELERY_QUEUE_NAME=music-insight.analysis
 # export MUSIC_INSIGHT_CELERY_VISIBILITY_TIMEOUT_SECONDS=14400
+# export MUSIC_INSIGHT_WORKER_CONCURRENCY=1
 export MUSIC_INSIGHT_MAX_DIRECT_WORK=2
 export MUSIC_INSIGHT_MAX_DIRECT_WORK_PER_USER=1
 export MUSIC_INSIGHT_MAX_UPLOAD_UNITS=2
 export MUSIC_INSIGHT_AUTH_KDF_MAX_CONCURRENCY=4
 export MUSIC_INSIGHT_DSP_MAX_CONCURRENCY=2
 export MUSIC_INSIGHT_OMNI_ENDPOINT=http://192.168.1.97:8004
+export MUSIC_INSIGHT_OMNI_COMPLETIONS_PATH=/v1/chat/completions
+export MUSIC_INSIGHT_OMNI_MODELS_PATH=/v1/models
+# export MUSIC_INSIGHT_OMNI_MODEL=服务端模型标识
 export MUSIC_INSIGHT_OMNI_CHUNK_SECONDS=30
 export MUSIC_INSIGHT_OMNI_CHUNK_OVERLAP_SECONDS=1.5
 export MUSIC_INSIGHT_OMNI_MAX_CONCURRENCY=1
@@ -284,8 +486,11 @@ export MUSIC_INSIGHT_COMNI_MAX_MESSAGE_MB=8
 export MUSIC_INSIGHT_LOCAL_MODEL_ROOT=src/model
 export MUSIC_INSIGHT_LOCAL_OMNI_ENDPOINT=http://127.0.0.1:8011
 export MUSIC_INSIGHT_LOCAL_LLAMA_SERVER=llama-server
-export MUSIC_INSIGHT_WEB_ORIGINS=http://192.168.1.97:5174
+export MUSIC_INSIGHT_WEB_ORIGINS=http://192.168.1.16:5174
 ```
+
+完整默认值与注释以 [`.env.example`](.env.example) 为准。当前 Settings 不会
+自动加载 `.env` 文件；应由 shell、进程管理器、容器或部署平台注入这些变量。
 
 默认 `memory` 模式仍适合本地开发。设置 `MUSIC_INSIGHT_JOB_BACKEND=redis`
 后，后台 `/jobs` 使用 Redis + Celery：任务状态、SSE 数据、取消、结果以及
@@ -302,16 +507,54 @@ export MUSIC_INSIGHT_WEB_ORIGINS=http://192.168.1.97:5174
 `MUSIC_INSIGHT_LOCAL_MODEL_ROOT` 之下。不要把任意公网 URL 或文件系统路径
 暴露给该服务。
 
-HTTPS 反向代理或前后端不在同一 Origin 时，还需要在构建前端时设置
-`VITE_API_BASE_URL`，例如 `VITE_API_BASE_URL=https://music-api.example.com`。
-未设置时，前端默认连接当前主机的 `8000` 端口。
+未设置 `VITE_API_BASE_URL` 时，前端请求同源 `/api`：开发服务器会将它代理
+到 `127.0.0.1:8000`，生产反向代理则必须自行把 `/api/*` 转发到 FastAPI 并
+去掉 `/api` 前缀。这是推荐部署方式。
+
+前端与 API 在同一 site、但不同 Origin 时，可以在构建前设置绝对地址，例如
+`VITE_API_BASE_URL=https://api.example.com`，同时把前端 Origin 加入
+`MUSIC_INSIGHT_WEB_ORIGINS`。当前会话 Cookie 使用 `SameSite=Lax`，后端也会
+拒绝 `Sec-Fetch-Site: cross-site`，因此跨 site 前端不是受支持的部署方式；
+它不能只靠 CORS 修复，而需要重新设计 Cookie、CSRF 与 HTTPS 策略。前端环境
+变量示例见 [`frontend/.env.example`](frontend/.env.example)。
+
+## 常见问题
+
+- **页面显示“后端未连接”**：先访问 `http://127.0.0.1:8000/health`。本机
+  开发还要确认 Vite 正在 `5174` 运行；生产构建则要确认反向代理已经配置
+  `/api`。
+- **局域网能打开页面但不能注册、登录或提交任务**：检查访问地址是否就是
+  `MUSIC_INSIGHT_WEB_ORIGINS` 中的完整 Origin，包括协议和端口；修改环境变量
+  后需要重启 FastAPI。
+- **模型在线但分析能力显示不可用**：`/v1/models` 可访问不等于支持
+  `input_audio`。查看“测试模型连接”返回的协议与音频能力；Comni 服务必须
+  暴露 Turn-based Gateway，普通文本模型不能直接替代音频 Provider。
+- **结果只有 BPM、调性或能量，没有歌词和情绪**：这代表统一模型失败后进入
+  DSP 降级，不是页面丢字段。到 `8000` Debug Console 展开任务，查看具体
+  分块错误、Provider 探测和证据警告。
+- **导赏提示正在生成或需要更新**：相同歌曲和证据版本只允许一个生成者；
+  按 `Retry-After` 稍后重试。歌词或基础结果修改后，使用“按最新证据重建”。
+- **本地权重不可用**：确认 `llama-server` 位于 `PATH`，主 GGUF 与
+  `mmproj*.gguf` 位于 `MUSIC_INSIGHT_LOCAL_MODEL_ROOT`。页面会显示 runner
+  是否存在，路径与模型能力会在创建分析任务时进一步校验。
 
 ## 验证
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/pytest -q
-cd frontend && pnpm test && pnpm build
+.venv/bin/ruff check .
+
+cd frontend
+pnpm test
+pnpm build
+
+curl --fail http://127.0.0.1:8000/health
 ```
+
+后端与前端测试数量会随功能增长，不在文档中固定。`pnpm build` 会执行
+TypeScript 检查并生成 `frontend/dist/`；FastAPI 不直接托管该目录，生产环境
+应由静态服务器或反向代理提供前端文件。真实模型 E2E 还取决于所配置 Provider，
+发布前应另外用一段已知歌词和段落的短音频验证模型能力与证据时间轴。
 
 ## 目录
 
@@ -321,13 +564,14 @@ src/model/       # 本地 GGUF 主模型与音频投影
 src/music_insight/
   adapters/      # Provider 注册、能力探测、协议传输、结构化工作流与本地 DSP
   api/
-    routers/     # 认证、任务、历史、评分、Debug 与系统 HTTP 边界
-    services/    # 分析提交、歌词重听、评分与上传用例
+    routers/     # 认证、任务、历史、导赏、评分、Debug 与系统 HTTP 边界
+    services/    # 分析、导赏、歌词重听、评分、波形与上传用例
     migrations.py # SQLite 版本化迁移
     database.py  # 连接、备份与迁移入口
   pipeline/      # 音频预处理、编排与融合
   reporting/     # Markdown 报告
   storage/       # 上传、资产引用与安全 GC
+  teaching/      # 导赏领域模型、证据检索、grounding 与保守降级
   ui/            # Streamlit 调试台
 ```
 
@@ -341,6 +585,26 @@ src/music_insight/
 
 架构与协议核对以官方资料为准：
 
+- [WaveSurfer v7 文档](https://wavesurfer.xyz/docs/)
+  说明共享 HTML Media 元素、预计算 peaks 与 Regions 插件。
+- [React：Sharing State Between Components](https://react.dev/learn/sharing-state-between-components)
+  说明共享交互状态应具有单一事实源；播放器时间不在多个组件间复制。
+- [Node.js：TypeScript type stripping](https://nodejs.org/api/typescript.html#type-stripping)
+  说明前端测试所用的原生 TypeScript 去类型能力及对应 Node 版本。
+- [FastAPI：Bigger Applications](https://fastapi.tiangolo.com/tutorial/bigger-applications/)
+  说明通过 `APIRouter` 拆分大型应用，导赏 API 因此没有继续堆入 `app.py`。
+- [Pydantic Configuration](https://docs.pydantic.dev/latest/api/config/)
+  说明 `extra="forbid"` 会拒绝模型或客户端提交的未知字段。
+- [SQLite Transactions](https://www.sqlite.org/lang_transaction.html)
+  明确 SQLite 同时只有一个写事务，因此推理调用必须放在事务外。
+- [MDN：Crypto.getRandomValues](https://developer.mozilla.org/en-US/docs/Web/API/Crypto/getRandomValues)
+  说明它可以在非安全上下文使用；局域网 HTTP 页面因此仍可生成随机幂等 ID。
+- [MDN：Cache-Control](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Cache-Control)
+  定义 `private` 与 `no-store`，用于保护按账号读取的波形响应。
+- [MDN：MediaDevices.getUserMedia](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia)
+  说明麦克风采集只在安全上下文开放。
+- [MDN：Set-Cookie / SameSite](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie#samesitesamesite-value)
+  说明跨 site 请求的 Cookie 约束。
 - [MiniCPM-o Comni Chat API](https://github.com/OpenBMB/MiniCPM-o-Demo/blob/Comni/docs/en/api/chat.md)
   定义 `/ws/chat` 请求、Float32 PCM 音频和事件流。
 - [websockets asyncio client](https://websockets.readthedocs.io/en/stable/reference/asyncio/client.html)

@@ -255,6 +255,17 @@ def openai_request_to_comni(request: dict[str, Any]) -> dict[str, Any]:
                 "content": _convert_content(raw_message.get("content")),
             }
         )
+    schema_instruction = _response_format_instruction(
+        request.get("response_format")
+    )
+    if schema_instruction:
+        messages.insert(
+            0,
+            {
+                "role": "system",
+                "content": schema_instruction,
+            },
+        )
 
     max_tokens = min(4096, max(1, int(request.get("max_tokens", 1200))))
     temperature = max(0.0, min(2.0, float(request.get("temperature", 0.0))))
@@ -272,6 +283,33 @@ def openai_request_to_comni(request: dict[str, Any]) -> dict[str, Any]:
         "omni_mode": False,
         "enable_thinking": False,
     }
+
+
+def _response_format_instruction(value: object) -> str | None:
+    """Preserve strict structured-output semantics on the Comni dialect."""
+
+    if not isinstance(value, dict):
+        return None
+    if value.get("type") == "json_object":
+        return "Return only one valid JSON object, without Markdown or commentary."
+    if value.get("type") != "json_schema":
+        return None
+    definition = value.get("json_schema")
+    schema = definition.get("schema") if isinstance(definition, dict) else None
+    if not isinstance(schema, dict):
+        return "Return only one valid JSON object, without Markdown or commentary."
+    schema_name = str(definition.get("name") or "structured_response")
+    encoded = json.dumps(
+        schema,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return (
+        "Return only one valid JSON object that exactly matches this JSON Schema. "
+        "Use every required field name verbatim; do not add Markdown or extra keys. "
+        f"JSON_SCHEMA_NAME={schema_name};JSON_SCHEMA={encoded}"
+    )
 
 
 def wav_to_float32_base64(audio_bytes: bytes) -> str:

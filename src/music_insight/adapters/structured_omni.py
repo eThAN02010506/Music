@@ -48,6 +48,24 @@ from music_insight.adapters.structured_output import (
     schema_retry_request,
     validate_structured_output,
 )
+from music_insight.adapters.structured_teaching_audio import (
+    prepare_relisten_excerpts,
+)
+from music_insight.adapters.structured_teaching_parsing import (
+    parse_relisten_result,
+    parse_teaching_chat_response,
+    parse_understanding_map,
+)
+from music_insight.adapters.structured_teaching_requests import (
+    relisten_request,
+    teaching_chat_request,
+    understanding_map_request,
+)
+from music_insight.adapters.structured_teaching_schemas import (
+    relisten_response_format,
+    teaching_chat_response_format,
+    understanding_map_response_format,
+)
 from music_insight.adapters.structured_omni_workflow import (
     StructuredOmniAnalysisWorkflow,
 )
@@ -59,6 +77,15 @@ from music_insight.schemas import (
     LyricsSegment,
     TimeSpan,
     UnifiedAudioResult,
+)
+from music_insight.teaching.models import (
+    MapGenerationContext,
+    MusicUnderstandingMap,
+    RelistenRequest,
+    RelistenResult,
+    TeachingChatContext,
+    TeachingChatResponse,
+    TeachingTimeSpan,
 )
 
 
@@ -155,6 +182,70 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
                 dsp,
                 progress,
             )
+
+    async def build_understanding_map(
+        self,
+        context: MapGenerationContext,
+    ) -> MusicUnderstandingMap:
+        """Generate a structured guide through the public teaching capability."""
+
+        async with self._request_scope():
+            model = await self._model()
+            request = understanding_map_request(
+                model=model,
+                context=context,
+                response_format=understanding_map_response_format(),
+            )
+            payload = await self._chat_json(request, timeout=420.0)
+        return parse_understanding_map(payload, context)
+
+    async def answer_music_question(
+        self,
+        context: TeachingChatContext,
+    ) -> TeachingChatResponse:
+        """Answer from bounded, time-local context without reanalyzing a song."""
+
+        async with self._request_scope():
+            model = await self._model()
+            request = teaching_chat_request(
+                model=model,
+                context=context,
+                response_format=teaching_chat_response_format(),
+            )
+            payload = await self._chat_json(request, timeout=300.0)
+        return parse_teaching_chat_response(payload)
+
+    async def listen_to_excerpts(
+        self,
+        request: RelistenRequest,
+    ) -> RelistenResult:
+        """Re-listen to at most two locally bounded excerpts, never a whole song."""
+
+        excerpts = await self._prepare_teaching_excerpts(request)
+        spans = [span for _, span in excerpts]
+        async with self._request_scope():
+            model = await self._model()
+            model_request = relisten_request(
+                model=model,
+                question=request.question,
+                excerpts=excerpts,
+                language=request.language,
+                response_format=relisten_response_format(
+                    excerpt_count=len(excerpts)
+                ),
+            )
+            payload = await self._chat_json(model_request, timeout=300.0)
+        return parse_relisten_result(
+            payload,
+            request=request,
+            spans=spans,
+        )
+
+    async def _prepare_teaching_excerpts(
+        self,
+        request: RelistenRequest,
+    ) -> list[tuple[bytes, TeachingTimeSpan]]:
+        return await prepare_relisten_excerpts(request)
 
     @staticmethod
     async def _notify(

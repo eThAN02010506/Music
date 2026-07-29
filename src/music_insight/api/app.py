@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+import inspect
 import os
 from urllib.parse import urlsplit
 
@@ -26,7 +27,7 @@ from music_insight.api.dependencies import (
 from music_insight.api.jobs import AnalysisJobStore
 from music_insight.api.orchestrator_factory import create_local_server
 from music_insight.api.routers import auth, debug, history, jobs as job_routes
-from music_insight.api.routers import singing, system
+from music_insight.api.routers import singing, system, teaching
 from music_insight.api.services.auth import AuthRateLimiter
 from music_insight.config import get_settings
 from music_insight.distributed.jobs import (
@@ -65,6 +66,42 @@ async def _lifespan(api: FastAPI):
     api.state.asset_gc_error = None
     settings = get_settings()
     history_store = await run_in_threadpool(get_history_store, settings)
+    if getattr(api.state, "teaching_repository", None) is None:
+        from music_insight.api.teaching import TeachingStore
+
+        api.state.teaching_repository = await run_in_threadpool(
+            TeachingStore,
+            history_store.database_path,
+        )
+    api.state.recovered_teaching = {
+        "understanding_maps": 0,
+        "music_messages": 0,
+    }
+    api.state.recovered_teaching_error = None
+    recover_teaching = getattr(
+        api.state.teaching_repository,
+        "recover_pending",
+        None,
+    )
+    if callable(recover_teaching):
+        try:
+            # A grace period prevents a newly starting API worker from
+            # invalidating work still owned by another healthy worker.
+            recovery_options = (
+                {
+                    "before": datetime.now(UTC) - timedelta(minutes=30),
+                }
+                if "before" in inspect.signature(recover_teaching).parameters
+                else {}
+            )
+            api.state.recovered_teaching = await run_in_threadpool(
+                recover_teaching,
+                **recovery_options,
+            )
+        except Exception as exc:
+            api.state.recovered_teaching_error = (
+                str(exc).strip() or exc.__class__.__name__
+            )[:1000]
     active_job_ids: set[str] = set()
     terminal_reconciler: asyncio.Task[None] | None = None
     if isinstance(api.state.jobs, RedisAnalysisJobStore):
@@ -163,6 +200,11 @@ def create_app(
     api.state.auth_rate_limiter = auth_rate_limiter or AuthRateLimiter()
     api.state.registration_lock = asyncio.Lock()
     api.state.allowed_web_origins = frozenset(allowed_origins)
+    api.state.teaching_repository = None
+    api.state.teaching_model = None
+    api.state.teaching_relisten_provider = None
+    api.state.recovered_teaching = None
+    api.state.recovered_teaching_error = None
 
     # Install the receive guard before the decorator middleware. Starlette
     # prepends each added middleware, so the final order below becomes:
@@ -253,6 +295,7 @@ def create_app(
         system.router,
         debug.router,
         history.router,
+        teaching.router,
         singing.router,
         job_routes.router,
     ):
