@@ -50,6 +50,9 @@ const EMPTY_SNAPSHOT: PlayerSnapshot = {
 export class PlayerStore {
   private media: HTMLMediaElement | null = null;
   private mediaCleanup: (() => void) | null = null;
+  private readonly followers = new Set<HTMLMediaElement>();
+  private stemMixActive = false;
+  private masterMutedBeforeStemMix = false;
   private snapshot: PlayerSnapshot;
   private readonly listeners = new Set<Listener>();
   private readonly scheduler: PlayerFrameScheduler;
@@ -87,8 +90,13 @@ export class PlayerStore {
   attach(media: HTMLMediaElement): () => void {
     this.detach();
     this.media = media;
+    if (this.stemMixActive) {
+      this.masterMutedBeforeStemMix = media.muted;
+      media.muted = true;
+    }
     const updateTime = () => {
       this.enforcePlaybackBoundary(media);
+      this.syncFollowers(media);
       this.patch({
         currentTime: clampTime(
           media.currentTime,
@@ -107,6 +115,7 @@ export class PlayerStore {
       });
     };
     const updatePlayback = () => {
+      this.syncFollowers(media, true);
       this.patch({ playing: !media.paused });
       if (!media.paused && this.snapshot.activePlayback) {
         this.startScheduler();
@@ -114,30 +123,45 @@ export class PlayerStore {
         this.stopScheduler();
       }
     };
+    const updateVolume = () => {
+      if (this.stemMixActive && !media.muted) media.muted = true;
+      this.syncFollowerVolumes(media);
+    };
     const updateEnded = () => {
       this.enforcePlaybackBoundary(media);
       updatePlayback();
       updateTime();
     };
     media.addEventListener("timeupdate", updateTime);
-    media.addEventListener("seeking", updateTime);
+    const updateSeeking = () => {
+      this.enforcePlaybackBoundary(media);
+      this.syncFollowers(media, true);
+      updateTime();
+    };
+    media.addEventListener("seeking", updateSeeking);
     media.addEventListener("loadedmetadata", updateMetadata);
     media.addEventListener("durationchange", updateMetadata);
     media.addEventListener("play", updatePlayback);
     media.addEventListener("pause", updatePlayback);
     media.addEventListener("ended", updateEnded);
+    media.addEventListener("volumechange", updateVolume);
     let cleaned = false;
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
       media.removeEventListener("timeupdate", updateTime);
-      media.removeEventListener("seeking", updateTime);
+      media.removeEventListener("seeking", updateSeeking);
       media.removeEventListener("loadedmetadata", updateMetadata);
       media.removeEventListener("durationchange", updateMetadata);
       media.removeEventListener("play", updatePlayback);
       media.removeEventListener("pause", updatePlayback);
       media.removeEventListener("ended", updateEnded);
+      media.removeEventListener("volumechange", updateVolume);
       if (this.media === media) {
+        if (this.stemMixActive) {
+          media.muted = this.masterMutedBeforeStemMix;
+        }
+        this.pauseFollowers();
         this.stopScheduler();
         this.media = null;
         this.mediaCleanup = null;
@@ -156,6 +180,7 @@ export class PlayerStore {
       return;
     }
     this.stopScheduler();
+    this.pauseFollowers();
     this.media = null;
     this.patch({ playing: false, activePlayback: null });
   }
@@ -165,6 +190,7 @@ export class PlayerStore {
     this.clearPlayback();
     if (this.media) {
       this.media.currentTime = next;
+      this.syncFollowers(this.media, true);
       if (autoplay) this.playMedia(this.media);
     }
     this.patch({ currentTime: next });
@@ -210,6 +236,36 @@ export class PlayerStore {
     this.patch({ activePlayback: null });
   }
 
+  attachFollower(media: HTMLMediaElement): () => void {
+    this.followers.add(media);
+    if (this.media && this.stemMixActive) {
+      this.syncFollower(this.media, media, true);
+    } else {
+      media.pause();
+    }
+    return () => {
+      if (!this.followers.delete(media)) return;
+      media.pause();
+    };
+  }
+
+  setStemMixActive(active: boolean): void {
+    if (active === this.stemMixActive) return;
+    this.stemMixActive = active;
+    if (!this.media) {
+      if (!active) this.pauseFollowers();
+      return;
+    }
+    if (active) {
+      this.masterMutedBeforeStemMix = this.media.muted;
+      this.media.muted = true;
+      this.syncFollowers(this.media, true);
+    } else {
+      this.media.muted = this.masterMutedBeforeStemMix;
+      this.pauseFollowers();
+    }
+  }
+
   execute(action: PlayerAction): void {
     const safe = sanitizePlayerAction(action, this.snapshot.duration);
     if (!safe) return;
@@ -229,6 +285,14 @@ export class PlayerStore {
     if (this.media) {
       this.media.pause();
       this.media.currentTime = 0;
+      if (this.stemMixActive) {
+        this.media.muted = this.masterMutedBeforeStemMix;
+      }
+    }
+    this.stemMixActive = false;
+    for (const follower of this.followers) {
+      follower.pause();
+      follower.currentTime = 0;
     }
     this.snapshot = {
       ...EMPTY_SNAPSHOT,
@@ -269,6 +333,7 @@ export class PlayerStore {
     });
     if (!this.media) return;
     this.media.currentTime = startTime;
+    this.syncFollowers(this.media, true);
     this.playMedia(this.media);
   }
 
@@ -299,6 +364,7 @@ export class PlayerStore {
       const media = this.media;
       if (!media) return;
       this.enforcePlaybackBoundary(media);
+      this.syncFollowers(media);
       this.patch({
         currentTime: clampTime(
           media.currentTime,
@@ -371,6 +437,54 @@ export class PlayerStore {
     });
     media.pause();
     media.currentTime = endTime;
+    this.syncFollowers(media, true);
+  }
+
+  private syncFollowers(
+    master: HTMLMediaElement,
+    force = false,
+  ): void {
+    if (!this.stemMixActive) return;
+    for (const follower of this.followers) {
+      this.syncFollower(master, follower, force);
+    }
+  }
+
+  private syncFollower(
+    master: HTMLMediaElement,
+    follower: HTMLMediaElement,
+    force: boolean,
+  ): void {
+    try {
+      follower.volume = master.volume;
+      if (
+        force
+        || !Number.isFinite(follower.currentTime)
+        || Math.abs(follower.currentTime - master.currentTime) > 0.08
+      ) {
+        follower.currentTime = master.currentTime;
+      }
+    } catch {
+      // Metadata may not be loaded yet. The next media event retries.
+    }
+    if (master.paused) {
+      follower.pause();
+      return;
+    }
+    void follower.play().catch(() => {
+      // The media element reports its own load/play error to the mixer UI.
+    });
+  }
+
+  private pauseFollowers(): void {
+    for (const follower of this.followers) follower.pause();
+  }
+
+  private syncFollowerVolumes(master: HTMLMediaElement): void {
+    if (!this.stemMixActive) return;
+    for (const follower of this.followers) {
+      follower.volume = master.volume;
+    }
   }
 
   private emit(): void {

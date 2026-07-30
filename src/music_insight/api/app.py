@@ -27,7 +27,7 @@ from music_insight.api.dependencies import (
 from music_insight.api.jobs import AnalysisJobStore
 from music_insight.api.orchestrator_factory import create_local_server
 from music_insight.api.routers import auth, debug, history, jobs as job_routes
-from music_insight.api.routers import singing, system, teaching
+from music_insight.api.routers import singing, stems, system, teaching
 from music_insight.api.services.auth import AuthRateLimiter
 from music_insight.config import get_settings
 from music_insight.distributed.jobs import (
@@ -37,6 +37,7 @@ from music_insight.distributed.jobs import (
 from music_insight.distributed.capacity import RedisCapacityLimiter
 from music_insight.distributed.reconcile import reconcile_terminal_history
 from music_insight.pipeline.resources import model_resources
+from music_insight.stems import StemSeparationService
 
 
 DEFAULT_WEB_ORIGINS = {
@@ -208,6 +209,10 @@ def create_app(
         max_active=settings.auth_kdf_max_concurrency,
         label="认证计算",
     )
+    api.state.stem_service = StemSeparationService(settings)
+    api.state.stem_compute_gate = asyncio.Semaphore(
+        settings.stem_max_concurrency
+    )
     api.state.auth_rate_limiter = auth_rate_limiter or AuthRateLimiter()
     api.state.registration_lock = asyncio.Lock()
     api.state.allowed_web_origins = frozenset(allowed_origins)
@@ -306,6 +311,7 @@ def create_app(
         system.router,
         debug.router,
         history.router,
+        stems.router,
         teaching.router,
         singing.router,
         job_routes.router,

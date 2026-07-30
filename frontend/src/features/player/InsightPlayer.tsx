@@ -7,6 +7,7 @@ import { rangeAround } from "./playerController";
 import { usePlayer, usePlayerSnapshot } from "./PlayerContext";
 import { WaveformView } from "./WaveformView";
 import { loadWaveformOnce } from "./waveformRequest";
+import { StemMixer } from "./StemMixer";
 
 export function InsightPlayer({
   audioUrl,
@@ -83,6 +84,7 @@ export function InsightPlayer({
         controls
         preload="metadata"
       />
+      {historyId && <StemMixer historyId={historyId} />}
       {media && waveform && (
         <WaveformView
           media={media}

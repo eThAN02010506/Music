@@ -24,6 +24,17 @@ class Settings(BaseSettings):
         ge=60,
         le=24 * 60 * 60,
     )
+    stem_backend: Literal["demucs", "disabled"] = "demucs"
+    stem_model: str = Field(
+        default="htdemucs",
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+    )
+    stem_device: Literal["auto", "cpu", "cuda", "mps"] = "auto"
+    stem_timeout_seconds: int = Field(default=7200, ge=60, le=24 * 60 * 60)
+    stem_max_concurrency: int = Field(default=1, ge=1, le=4)
+    stem_model_cache_dir: Path | None = None
     # A singing comparison carries two independently bounded files.
     max_upload_units: int = Field(default=2, ge=2, le=16)
     auth_kdf_max_concurrency: int = Field(default=4, ge=1, le=16)

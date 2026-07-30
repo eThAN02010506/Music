@@ -13,6 +13,7 @@ import type {
   SingingAttempt,
   SingingAttemptCursor,
   SingingScore,
+  StemStatus,
   ListenerProfile,
   ListenerLevel,
   TeachingChatRequest,
@@ -191,6 +192,17 @@ export const api = {
       `/history/${encodeURIComponent(id)}/waveform`,
       undefined,
       { signal },
+    ),
+  historyStems: (id: string, signal?: AbortSignal) =>
+    request<StemStatus>(
+      `/history/${encodeURIComponent(id)}/stems`,
+      undefined,
+      { signal },
+    ),
+  generateHistoryStems: (id: string) =>
+    request<StemStatus>(
+      `/history/${encodeURIComponent(id)}/stems`,
+      { method: "POST" },
     ),
   listenerProfile: (signal?: AbortSignal) =>
     request<ListenerProfile>("/listener-profile", undefined, { signal }),

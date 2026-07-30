@@ -81,6 +81,10 @@ def debug_state(
                 if settings.job_backend == "redis"
                 else None
             ),
+            "stem_backend": settings.stem_backend,
+            "stem_model": settings.stem_model,
+            "stem_device": settings.stem_device,
+            "stem_max_concurrency": settings.stem_max_concurrency,
             "workspace": str(settings.workspace_dir.resolve()),
         },
         "jobs": [item.model_dump(mode="json") for item in recent_jobs],

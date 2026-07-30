@@ -59,8 +59,9 @@ export MUSIC_INSIGHT_CELERY_VISIBILITY_TIMEOUT_SECONDS=14400
 # export MUSIC_INSIGHT_ASR_VERIFIER_VAD=false
 ```
 
-生产 API/Worker 使用 `pip install .`；只有开发和测试环境需要
-`pip install ".[dev]"`。当前 macOS Python 3.13 会跳过名称
+生产 API/Worker 使用 `pip install .`；需要在 API 节点生成分轨时使用
+`pip install ".[stems]"`，开发与完整测试环境使用
+`pip install ".[dev,stems]"`。当前 macOS Python 3.13 会跳过名称
 以 `__editable__` 开头的 `.pth` 文件，因此不要依赖 setuptools editable
 安装来提供 `music-insight-worker` 命令；源码开发仍可显式使用
 `PYTHONPATH=src`。
@@ -112,6 +113,13 @@ PYTHONPATH=src celery \
 控制；启动 N 个 Worker 时，同一模型端点仍可能同时收到 N 个后台分析请求。
 共享单卡模型时应先只运行一个目标队列 Worker，或增加按 Provider 划分的独立
 队列，再逐步压测扩容。
+
+四轨分离当前由接收请求的 API 节点执行，不属于 Celery 分析任务。Redis 模式
+仍会通过全局直接工作租约限制请求，API 节点内部另受
+`MUSIC_INSIGHT_STEM_MAX_CONCURRENCY` 约束；相同音频使用 POSIX 文件锁和内容
+寻址目录避免重复分离。`.music_insight/stems/` 与 Demucs 模型缓存应位于 API
+节点的持久磁盘；如果未来部署多个 active-active API 节点，需要先将 SQLite、
+stem 缓存和锁目录一起迁移到明确支持一致锁语义的共享存储。
 
 标准化音频缓存在每个 Worker 的 `MUSIC_INSIGHT_WORKSPACE_DIR/normalized/`。
 API 启动时的资产 GC 不会扫描远程 Worker 的本地磁盘，因此该目录应使用

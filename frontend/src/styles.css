@@ -849,6 +849,83 @@ footer { width: min(1180px, calc(100% - 48px)); margin: 0 auto; border-top: 1px 
   footer { width: calc(100% - 24px); }
 }
 
+.stem-mixer {
+  display: grid;
+  gap: 12px;
+  margin: 10px 0 4px;
+  padding: 14px;
+  border: 1px solid rgba(145, 230, 168, .16);
+  border-radius: 14px;
+  background: rgba(12, 20, 17, .62);
+}
+.stem-mixer.active {
+  border-color: rgba(145, 230, 168, .44);
+  box-shadow: inset 0 0 0 1px rgba(145, 230, 168, .08);
+}
+.stem-mixer.compact {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+.stem-mixer.compact > div,
+.stem-mixer header > div { display: grid; gap: 3px; }
+.stem-mixer header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.stem-mixer strong { color: var(--ink); }
+.stem-mixer span, .stem-mixer small { color: var(--muted); }
+.stem-generate, .stem-mix-toggle {
+  min-height: 38px;
+  border: 1px solid rgba(145, 230, 168, .32);
+  background: rgba(145, 230, 168, .1);
+  color: var(--accent);
+}
+.stem-track-controls {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.stem-track-controls article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, .025);
+}
+.stem-track-controls article > div { display: grid; min-width: 0; }
+.stem-track-controls button {
+  min-height: 32px;
+  padding: 5px 8px;
+  font-size: .78rem;
+}
+.stem-track-controls button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(145, 230, 168, .12);
+}
+.stem-track-controls button.danger {
+  border-color: rgba(255, 147, 131, .55);
+  color: var(--danger);
+  background: rgba(255, 147, 131, .1);
+}
+.stem-audio-elements { display: none; }
+.stem-mixer-status { margin: 10px 0; color: var(--muted); }
+.stem-mixer .stem-disclaimer { line-height: 1.5; }
+
+@media (max-width: 980px) {
+  .stem-track-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 620px) {
+  .stem-mixer.compact, .stem-track-controls { grid-template-columns: 1fr; }
+  .stem-mixer header { align-items: stretch; flex-direction: column; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after {

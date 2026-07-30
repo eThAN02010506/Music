@@ -85,6 +85,7 @@ async def api_info(
             "jobs": "POST /jobs",
             "remote_audio_job": "POST /jobs/from-url",
             "history": "GET /history",
+            "stems": "GET/POST /history/{id}/stems",
             "singing_score": "POST /history/{id}/singing/score",
             "singing_compare": "POST /singing/compare",
             "singing_attempts": "GET /singing/attempts",

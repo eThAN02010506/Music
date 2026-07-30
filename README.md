@@ -12,6 +12,7 @@ Music Insight 是一个本地优先、证据驱动的音乐理解与演唱练习
 - 边听边问、当前 15 秒解释、波形框选、A/B 片段比较和同步歌词；
 - 本地文件或受限公网直接音频 URL 导入；
 - 多账号隔离的历史、歌曲级多对话、结果对比、歌词校对与版本回溯；
+- 人声、鼓、低音、其他乐器四轨的独听、静音和同步 A/B 复听；
 - 参考音频与个人演唱的本地 DSP 评分、个人成绩历史和娱乐排行榜；
 - 可选的独立 ASR 歌词二次验证，统一模型失败时仍可明确降级；
 - OpenAI `input_audio`、MiniCPM-o Comni 和本地 GGUF Provider；
@@ -42,13 +43,14 @@ SSE 进度、历史和导赏 API；Streamlit 只保留为兼容调试台。模�
 - Node.js `>=22.12.0`，以及 pnpm；
 - 完整歌词、情绪与导赏能力需要至少一个可访问的音频模型服务；没有模型时
   仍可启动应用并验证界面和 DSP 降级链路；
-- 本地 GGUF 模式额外需要支持音频投影的 `llama-server`。
+- 本地 GGUF 模式额外需要支持音频投影的 `llama-server`；
+- 分轨独听需要 `stems` 可选依赖；默认使用本地 Demucs 四轨模型。
 
 在项目根目录安装并启动后端：
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install ".[dev]"
+.venv/bin/pip install ".[dev,stems]"
 PYTHONPATH=src .venv/bin/python -m uvicorn \
   music_insight.api.app:app --host 127.0.0.1 --port 8000
 ```
@@ -98,6 +100,8 @@ pnpm dev
    完成。视频网页、登录资源和 DRM 内容不由链接导入功能抓取；模型失败时页面
    仍会保留可用的 DSP 结果和明确警告。
 4. 从左侧历史打开歌曲，检查报告与歌词时间轴；必要时校对歌词或定向重听。
+   播放器中的“生成四轨”会按需生成并缓存人声、鼓、低音和其他乐器；首次运行
+   可能需要下载模型并等待数分钟，之后相同音频直接复用缓存。
 5. 基础教学式导赏会根据已有证据自动准备；点击地图时间范围复听，或使用
    “解释当前 15 秒”直接提问。要比较两段，可以手动框选并分别“设为 A”
    “设为 B”，也可以让界面先建立相邻默认范围；“连续播放 A→B”用于听辨，
@@ -283,11 +287,17 @@ expressive_role, audio_evidence, lyrics_context, listening_task,
 alternative_readings, confidence
 ```
 
-播放器与导赏共享同一个 HTML 音频元素和同一播放时钟。后端按需流式解码并
+播放器与导赏共享同一个主 HTML 音频元素和同一播放时钟。后端按需流式解码并
 生成有界波形 peaks，响应按用户鉴权且使用私有 `no-store` 缓存策略；前端用
 WaveSurfer Regions 支持最多 30 秒框选、段落标记、点击时间跳转、选区循环和
 A/B 片段。歌词跟随同一个时钟高亮。模型返回的播放器动作只会被解析成白名单
 动作，并且必须由用户点击后才执行。
+
+完成按需分离后，播放器可以启用四轨混音，并对人声、鼓、低音和其他乐器分别
+“独听”或“静音”。原曲仍是唯一时间源，四个隐藏音轨跟随播放、暂停、seek、
+选区循环与 A/B 跳转；超过 80 ms 的漂移会自动校正，原播放器音量也会同步到
+分轨。关闭分轨混音后恢复原曲。分离结果是模型估计，复杂混音可能存在串音和
+伪影，不应被描述为原始工程中的真实轨道。
 
 “边听边问”自动提交歌曲 ID、当前位置、用户选区或 A/B 范围；附近歌词、
 地图节点和分析证据由服务端按时间检索，浏览器不会自行拼接或声称证据。
@@ -302,8 +312,9 @@ A/B 范围或问题附近证据不足时，尝试对最多两个、每段不超�
 一次局部重听；API 客户端可以显式使用 `relisten_policy=always` 强制尝试。
 Provider 不支持时会明确降级到已保存证据。用户可以显式标记自己已经听出的
 旋律、和声、节奏、音色等概念，记录会进入听觉训练档案；当前尚未把这些概念
-自动组织成长期课程。人声、鼓、低音等分轨独听/静音也尚未提供，因为它需要
-能实际返回可播放 stems 的专用分离后端，不能用分类标签冒充。
+自动组织成长期课程。分轨独听使用实际生成的 WAV stems，不使用分类标签冒充。
+输出按源音频哈希缓存于 `.music_insight/stems/`，历史删除后由现有宽限期 GC
+回收无引用缓存。
 
 内存模式下导赏增强、问答和其他直接工作使用进程内并发门；Redis 模式会自动
 改用带心跳和过期回收的 Redis 全局租约，多个 API 进程共享直接工作上限。
@@ -446,6 +457,9 @@ GET  /history
 GET  /history/{id}
 GET  /history/{id}/audio
 GET  /history/{id}/waveform
+GET  /history/{id}/stems             # 查询四轨缓存状态
+POST /history/{id}/stems             # 生成或复用四轨
+GET  /history/{id}/stems/{stem}      # vocals/drums/bass/other
 PATCH /history/{id}
 PATCH /history/{id}/lyrics
 POST  /history/{id}/lyrics/retry
@@ -510,6 +524,12 @@ export MUSIC_INSIGHT_JOB_BACKEND=memory
 export MUSIC_INSIGHT_MAX_DIRECT_WORK=2
 export MUSIC_INSIGHT_MAX_DIRECT_WORK_PER_USER=1
 export MUSIC_INSIGHT_DIRECT_WORK_LEASE_TTL_SECONDS=3600
+export MUSIC_INSIGHT_STEM_BACKEND=demucs
+export MUSIC_INSIGHT_STEM_MODEL=htdemucs
+export MUSIC_INSIGHT_STEM_DEVICE=auto
+export MUSIC_INSIGHT_STEM_TIMEOUT_SECONDS=7200
+export MUSIC_INSIGHT_STEM_MAX_CONCURRENCY=1
+# export MUSIC_INSIGHT_STEM_MODEL_CACHE_DIR=.music_insight/models/demucs
 export MUSIC_INSIGHT_MAX_UPLOAD_UNITS=2
 export MUSIC_INSIGHT_AUTH_KDF_MAX_CONCURRENCY=4
 export MUSIC_INSIGHT_DSP_MAX_CONCURRENCY=2

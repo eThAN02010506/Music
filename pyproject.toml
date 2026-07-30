@@ -26,6 +26,9 @@ dependencies = [
 music-insight-worker = "music_insight.worker:main"
 
 [project.optional-dependencies]
+stems = [
+    "demucs>=4.0.0,<5",
+]
 dev = [
     "fakeredis[lua]>=2.28.0",
     "httpx2>=2.0.0,<3",

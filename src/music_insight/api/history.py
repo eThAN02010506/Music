@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import sqlite3
@@ -34,6 +35,7 @@ from music_insight.storage.history_assets import HistoryAssetRegistry
 
 __all__ = [
     "HistoryDetail",
+    "HistoryAudioSource",
     "HistoryEntryNotFoundError",
     "HistoryLyricsRetryRequest",
     "HistoryLyricsRetryResult",
@@ -47,6 +49,12 @@ __all__ = [
 
 class HistoryEntryNotFoundError(LookupError):
     """Raised when an owner-scoped history update matched no record."""
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryAudioSource:
+    path: Path
+    content_key: str
 
 
 class HistoryStore:
@@ -519,20 +527,41 @@ class HistoryStore:
         *,
         user_id: str,
     ) -> Path | None:
+        source = self.audio_source(job_id, user_id=user_id)
+        return source.path if source is not None else None
+
+    def audio_source(
+        self,
+        job_id: str,
+        *,
+        user_id: str,
+    ) -> HistoryAudioSource | None:
         owner = self._require_owner(user_id)
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT audio_path
+                SELECT analyses.audio_path, analysis_assets.content_key
                 FROM analyses
-                WHERE id = ? AND user_id = ?
+                LEFT JOIN analysis_assets
+                  ON analysis_assets.analysis_id = analyses.id
+                 AND analysis_assets.path = analyses.audio_path
+                 AND analysis_assets.kind = 'source'
+                WHERE analyses.id = ? AND analyses.user_id = ?
                 """,
                 (job_id, owner),
             ).fetchone()
         if row is None:
             return None
         path = Path(row["audio_path"])
-        return path if path.exists() and path.is_file() else None
+        if not path.exists() or not path.is_file():
+            return None
+        content_key = row["content_key"]
+        if not isinstance(content_key, str) or not content_key.strip():
+            content_key = self.assets.source_content_key(path)
+        return HistoryAudioSource(
+            path=path,
+            content_key=content_key.strip().lower(),
+        )
 
     def claim_legacy(self, user_id: str) -> int:
         """Assign only ownerless analyses from older schemas to one user."""

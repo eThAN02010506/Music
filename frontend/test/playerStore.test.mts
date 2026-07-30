@@ -39,6 +39,8 @@ class FakeMedia {
   currentTime = 0;
   duration = 120;
   paused = true;
+  muted = false;
+  volume = 1;
   private readonly listeners = new Map<string, Set<() => void>>();
 
   addEventListener(type: string, listener: () => void): void {
@@ -177,4 +179,50 @@ test("a manual seek exits controlled playback without pausing normal playback", 
   assert.equal(media.paused, false);
   assert.equal(store.getSnapshot().activePlayback, null);
   assert.equal(scheduler.pending, 0);
+});
+
+test("stem followers share the master clock and restore the original mix", async () => {
+  const { store, media } = fixture();
+  const follower = new FakeMedia();
+  follower.currentTime = 40;
+  const detachFollower = store.attachFollower(
+    follower as unknown as HTMLMediaElement,
+  );
+
+  store.setStemMixActive(true);
+  assert.equal(media.muted, true);
+  assert.equal(follower.currentTime, 0);
+
+  await media.play();
+  assert.equal(follower.paused, false);
+  media.currentTime = 22;
+  media.emit("seeking");
+  assert.equal(follower.currentTime, 22);
+  media.volume = 0.4;
+  media.emit("volumechange");
+  assert.equal(follower.volume, 0.4);
+
+  media.pause();
+  assert.equal(follower.paused, true);
+  store.setStemMixActive(false);
+  assert.equal(media.muted, false);
+
+  detachFollower();
+});
+
+test("stem synchronization corrects drift without chasing tiny offsets", async () => {
+  const { store, media } = fixture();
+  const follower = new FakeMedia();
+  store.attachFollower(follower as unknown as HTMLMediaElement);
+  store.setStemMixActive(true);
+  await media.play();
+
+  media.currentTime = 10;
+  follower.currentTime = 10.04;
+  media.emit("timeupdate");
+  assert.equal(follower.currentTime, 10.04);
+
+  follower.currentTime = 9.5;
+  media.emit("timeupdate");
+  assert.equal(follower.currentTime, 10);
 });

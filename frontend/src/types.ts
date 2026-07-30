@@ -118,6 +118,22 @@ export interface HistoryWaveform {
   points_per_channel: number;
 }
 
+export type StemName = "vocals" | "drums" | "bass" | "other";
+
+export interface StemTrack {
+  name: StemName;
+  label: string;
+  audio_url: string;
+}
+
+export interface StemStatus {
+  status: "unavailable" | "missing" | "processing" | "ready";
+  backend: string;
+  model: string;
+  stems: StemTrack[];
+  detail: string | null;
+}
+
 export interface LyricsRetryResult {
   start_s: number;
   end_s: number;
