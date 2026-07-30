@@ -3,6 +3,19 @@ from __future__ import annotations
 from typing import Any
 
 
+_AUDIO_DIMENSIONS = [
+    "melody",
+    "harmony",
+    "rhythm",
+    "timbre",
+    "dynamics",
+    "instrumentation",
+    "space",
+    "structure",
+    "other",
+]
+
+
 def chunk_response_format() -> dict[str, Any]:
     nullable_number = {
         "anyOf": [
@@ -37,6 +50,14 @@ def chunk_response_format() -> dict[str, Any]:
         },
         "required": [*timed_item["required"], "language"],
     }
+    musical_observation_item = {
+        **timed_item,
+        "properties": {
+            **timed_item["properties"],
+            "dimension": {"type": "string", "enum": _AUDIO_DIMENSIONS},
+        },
+        "required": [*timed_item["required"], "dimension"],
+    }
     return {
         "type": "json_schema",
         "json_schema": {
@@ -51,7 +72,10 @@ def chunk_response_format() -> dict[str, Any]:
                         "anyOf": [{"type": "boolean"}, {"type": "null"}]
                     },
                     "vocal_confidence": nullable_confidence,
-                    "sound_events": {"type": "array", "items": timed_item},
+                    "sound_events": {
+                        "type": "array",
+                        "items": musical_observation_item,
+                    },
                     "emotion_timeline": {"type": "array", "items": timed_item},
                     "themes": {"type": "array", "items": {"type": "string"}},
                     "narrative": {"type": "string"},
@@ -74,10 +98,16 @@ def chunk_response_format() -> dict[str, Any]:
 
 def recovery_response_format(missing: list[str] | None = None) -> dict[str, Any]:
     chunk_schema = chunk_response_format()["json_schema"]["schema"]
+    recoverable = {
+        "lyrics",
+        "emotion_timeline",
+        "vocals_detected",
+        "vocal_confidence",
+    }
     requested = [
         field
         for field in (missing or ["lyrics", "emotion_timeline"])
-        if field in {"lyrics", "emotion_timeline"}
+        if field in recoverable
     ]
     return {
         "type": "json_schema",

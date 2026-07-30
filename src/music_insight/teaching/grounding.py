@@ -3,8 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import re
 
-from music_insight.schemas import AnalysisResult, Evidence, EvidenceType
+from music_insight.schemas import (
+    AnalysisResult,
+    Evidence,
+    EvidenceType,
+    VocalPresenceStatus,
+)
 from music_insight.teaching.models import (
     AnswerEvidence,
     AudioDimension,
@@ -87,7 +93,7 @@ def analysis_source_catalog(result: AnalysisResult) -> dict[str, SourceFact]:
                 source_id=source_id,
                 source_type=EvidenceSourceType.ANALYSIS_EVIDENCE,
                 statement=_canonical_evidence_statement(evidence.text),
-                dimension=_infer_dimension(evidence.text, default_dimension),
+                dimension=_evidence_dimension(evidence, default_dimension),
                 span=_teaching_span(evidence),
                 confidence=evidence.confidence,
                 claim_type=_claim_type(evidence.kind),
@@ -138,12 +144,39 @@ def _is_diagnostic_failure(evidence: Evidence) -> bool:
     """Keep pipeline failures out of the audible-fact evidence catalog."""
 
     evidence_id = evidence.id.casefold()
+    normalized_text = " ".join(evidence.text.split())
     return (
         not evidence.text.strip()
+        or evidence.confidence == 0
+        or evidence.metadata.get("diagnostic") is True
         or bool(evidence.metadata.get("error_type"))
-        or evidence_id.endswith(".error")
-        or ".error." in evidence_id
+        or evidence_id.endswith(
+            (".error", ".unavailable", ".inconclusive", ".rejected")
+        )
+        or any(
+            marker in evidence_id
+            for marker in (".error.", ".unavailable.", ".inconclusive.")
+        )
+        or bool(
+            re.fullmatch(
+                r"已完成第 \d+ 个音频分块分析。[；。]?",
+                normalized_text,
+            )
+        )
     )
+
+
+def _evidence_dimension(
+    evidence: Evidence,
+    default: AudioDimension,
+) -> AudioDimension:
+    raw_dimension = evidence.metadata.get("teaching_dimension")
+    if isinstance(raw_dimension, str):
+        try:
+            return AudioDimension(raw_dimension)
+        except ValueError:
+            pass
+    return _infer_dimension(evidence.text, default)
 
 
 def _canonical_evidence_statement(text: str) -> str:
@@ -191,6 +224,8 @@ def validate_understanding_map(
         duration_s=duration_s,
         issues=issues,
     )
+    if result.vocal_presence.status is VocalPresenceStatus.INSTRUMENTAL:
+        _validate_instrumental_map(understanding_map, issues)
     has_map_support = any(
         point.evidence_refs for point in understanding_map.emotional_arc
     ) or any(event.audio_evidence for event in understanding_map.events)
@@ -200,6 +235,45 @@ def validate_understanding_map(
         )
     if issues:
         raise GroundingError(issues)
+
+
+def _validate_instrumental_map(
+    understanding_map: MusicUnderstandingMap,
+    issues: list[str],
+) -> None:
+    """Reject lyric- or song-form claims after instrumental status is confirmed."""
+
+    vocal_labels = (
+        "主歌",
+        "副歌",
+        "歌词",
+        "演唱",
+        "歌唱",
+        "verse",
+        "chorus",
+        "lyric",
+    )
+    for section in understanding_map.sections:
+        folded = section.label.casefold()
+        if any(label in folded for label in vocal_labels):
+            issues.append(
+                f"instrumental section {section.id} uses a vocal-song label"
+            )
+    for event in understanding_map.events:
+        if event.lyrics_context:
+            issues.append(f"instrumental event {event.id} includes lyrics")
+        if any(
+            reference.dimension is AudioDimension.LYRICS
+            for reference in event.audio_evidence
+        ):
+            issues.append(
+                f"instrumental event {event.id} cites lyric evidence"
+            )
+        task = event.listening_task.casefold()
+        if any(label in task for label in vocal_labels):
+            issues.append(
+                f"instrumental event {event.id} assigns a vocal listening task"
+            )
 
 
 def _validate_emotional_arc(
@@ -472,6 +546,8 @@ def analysis_source_catalog_from_context(
 
     catalog: dict[str, SourceFact] = {}
     for index, evidence in enumerate(context.nearby_analysis_evidence):
+        if _is_diagnostic_failure(evidence):
+            continue
         source_id = str(evidence.metadata.get("teaching_source_id") or "")
         if not source_id:
             source_id = f"context_evidence:{index}"

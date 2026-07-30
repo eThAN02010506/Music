@@ -432,7 +432,9 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
             duration_s=duration_s,
             language_hint=language_hint,
             issues=issues,
-            response_format=self._recovery_response_format(["lyrics"]),
+            response_format=self._recovery_response_format(
+                ["lyrics", "vocals_detected", "vocal_confidence"]
+            ),
         )
         return await self._chat_json(request, timeout=600.0)
 

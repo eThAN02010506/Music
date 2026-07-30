@@ -8,6 +8,19 @@ from typing import Any
 from music_insight.schemas import Evidence, EvidenceType, LyricsSegment, TimeSpan
 
 
+_AUDIO_DIMENSIONS = {
+    "melody",
+    "harmony",
+    "rhythm",
+    "timbre",
+    "dynamics",
+    "instrumentation",
+    "space",
+    "structure",
+    "other",
+}
+
+
 def meaningful(value: str, placeholder_values: Collection[str]) -> bool:
     text = value.strip()
     placeholders = {item.casefold() for item in placeholder_values}
@@ -141,6 +154,13 @@ def evidence_items(
             chunk_seconds,
         ):
             continue
+        raw_dimension = item.get("dimension")
+        metadata = (
+            {"teaching_dimension": raw_dimension}
+            if isinstance(raw_dimension, str)
+            and raw_dimension in _AUDIO_DIMENSIONS
+            else {}
+        )
         results.append(
             Evidence(
                 id=f"{prefix}.{index}",
@@ -149,6 +169,7 @@ def evidence_items(
                 text=text,
                 confidence=confidence(item.get("confidence")),
                 span=span,
+                metadata=metadata,
             )
         )
     return results

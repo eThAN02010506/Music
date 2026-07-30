@@ -143,6 +143,34 @@ class FakePartiallyClassifiedOmni(FakeInstrumentalOmni):
         return payload
 
 
+class FakeRecoveredInstrumentalOmni(FakeRecoveringOmni):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.requested_missing_fields = []
+
+    async def _analyze_chunk(self, **kwargs):
+        return {
+            "lyrics": [],
+            "instruments": ["弦乐组", "铜管组"],
+            "vocals_detected": (
+                None if kwargs["start_s"] == 0 else False
+            ),
+            "vocal_confidence": None,
+            "sound_events": [],
+            "emotion_timeline": [],
+            "themes": [],
+            "narrative": "",
+        }
+
+    async def _recover_missing(self, **kwargs):
+        self.requested_missing_fields.append(kwargs["missing"])
+        return {
+            "lyrics": [],
+            "vocals_detected": False,
+            "vocal_confidence": 0.9,
+        }
+
+
 class FakeEmotionMissingOmni(QwenOmniUnifiedAdapter):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -207,6 +235,16 @@ class FakeQualityRetryOmni(QwenOmniUnifiedAdapter):
 
     async def _synthesize_report(self, **kwargs):
         return "final", [], [], []
+
+
+class FakeQualityRetryInstrumentalOmni(FakeQualityRetryOmni):
+    async def _recover_lyrics_quality(self, **kwargs):
+        self.quality_recovery_calls += 1
+        return {
+            "lyrics": [],
+            "vocals_detected": False,
+            "vocal_confidence": 0.94,
+        }
 
 
 class FakeJsonRetryOmni(QwenOmniUnifiedAdapter):
@@ -617,8 +655,18 @@ def test_chunk_parser_offsets_and_bounds_timestamps():
         {
             "lyrics": [{"text": "hello", "start_s": 1, "end_s": 2}],
             "sound_events": [
-                {"description": "鼓声", "start_time": 20, "end_time": 35},
-                {"description": "越界幻觉", "start_time": 40, "end_time": 42},
+                {
+                    "description": "鼓声",
+                    "start_time": 20,
+                    "end_time": 35,
+                    "dimension": "rhythm",
+                },
+                {
+                    "description": "越界幻觉",
+                    "start_time": 40,
+                    "end_time": 42,
+                    "dimension": "other",
+                },
             ],
             "emotion_timeline": [],
             "instruments": ["鼓"],
@@ -633,6 +681,10 @@ def test_chunk_parser_offsets_and_bounds_timestamps():
     assert parsed["lyrics"][0].span.start_s == 31.0
     assert len(parsed["sound_events"]) == 1
     assert parsed["sound_events"][0].span.end_s == 60.0
+    assert (
+        parsed["sound_events"][0].metadata["teaching_dimension"]
+        == "rhythm"
+    )
 
 
 def test_chunk_parser_keeps_missing_timestamps_unknown_for_each_line():
@@ -708,6 +760,12 @@ def test_adapter_uses_strict_structured_output_schemas():
     assert set(lyric_recovery["json_schema"]["schema"]["properties"]) == {
         "lyrics"
     }
+    vocal_recovery = adapter._recovery_response_format(
+        ["lyrics", "vocals_detected", "vocal_confidence"]
+    )
+    assert set(
+        vocal_recovery["json_schema"]["schema"]["properties"]
+    ) == {"lyrics", "vocals_detected", "vocal_confidence"}
 
 
 def test_unified_adapter_recovers_missing_lyrics(tmp_path):
@@ -784,6 +842,43 @@ def test_unified_adapter_keeps_partial_no_vocal_coverage_unknown(tmp_path):
     assert result.scene.vocal_confidence is None
     assert not any(
         item.id == "omni.vocal_presence"
+        for item in result.scene.evidence
+    )
+
+
+def test_unified_adapter_recovers_vocal_presence_without_extra_call(tmp_path):
+    audio = tmp_path / "recovered-instrumental.wav"
+    _write_test_audio(audio, seconds=6.0, sample_rate=16_000)
+    adapter = FakeRecoveredInstrumentalOmni(
+        endpoint="http://127.0.0.1:9999",
+        model="test-model",
+        chunk_seconds=5,
+    )
+
+    result = asyncio.run(adapter.analyze(_asset(audio), DspResult()))
+
+    assert result.scene.vocals_detected is False
+    assert result.scene.vocal_confidence == pytest.approx(0.9)
+    assert adapter.requested_missing_fields == [
+        ["lyrics", "vocals_detected", "vocal_confidence"],
+        ["lyrics", "vocals_detected", "vocal_confidence"],
+    ]
+    assert not any(
+        item.id.endswith(".recovery.inconclusive")
+        for item in result.scene.evidence
+    )
+    instrumentation = [
+        item
+        for item in result.scene.evidence
+        if item.id.endswith(".instrumentation")
+    ]
+    assert len(instrumentation) == 2
+    assert all(
+        item.metadata["teaching_dimension"] == "instrumentation"
+        for item in instrumentation
+    )
+    assert not any(
+        item.text.startswith("已完成第")
         for item in result.scene.evidence
     )
 
@@ -942,6 +1037,24 @@ def test_unified_adapter_relistens_only_bad_lyrics_chunk(tmp_path):
     )
     assert retry.metadata["issues"]
     assert retry.metadata["recovered_issues"] == []
+
+
+def test_bad_lyrics_retry_can_confirm_instrumental_without_another_call(
+    tmp_path,
+):
+    audio = tmp_path / "quality-retry-instrumental.wav"
+    _write_test_audio(audio, seconds=2.0, sample_rate=16_000)
+    adapter = FakeQualityRetryInstrumentalOmni(
+        endpoint="http://127.0.0.1:9999",
+        model="test-model",
+    )
+
+    result = asyncio.run(adapter.analyze(_asset(audio), DspResult()))
+
+    assert adapter.quality_recovery_calls == 1
+    assert result.asr.lyrics == []
+    assert result.scene.vocals_detected is False
+    assert result.scene.vocal_confidence == pytest.approx(0.94)
 
 
 def test_manual_retry_returns_quality_checked_relative_lyrics():

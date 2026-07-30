@@ -13,6 +13,8 @@ from music_insight.schemas import (
     EvidenceType,
     LyricsSegment,
     TimeSpan,
+    VocalPresenceResult,
+    VocalPresenceStatus,
 )
 from music_insight.teaching.fallback import EvidenceTeachingModel
 from music_insight.teaching.grounding import (
@@ -158,8 +160,31 @@ def test_teaching_catalog_deduplicates_aggregate_evidence_and_ignores_errors():
         span=TimeSpan(start_s=0, end_s=20),
         metadata={"error_type": "ReadError"},
     )
+    placeholder = Evidence(
+        id="omni.chunk.2.analysis",
+        source="audio-model",
+        kind=EvidenceType.INFERRED,
+        text="已完成第 2 个音频分块分析。",
+        confidence=0.7,
+        span=TimeSpan(start_s=10, end_s=20),
+    )
+    inconclusive = Evidence(
+        id="omni.chunk.2.recovery.inconclusive",
+        source="audio-model",
+        kind=EvidenceType.OBSERVED,
+        text="定向重听仍无法确认可靠歌词或人声状态。",
+        confidence=0,
+        span=TimeSpan(start_s=10, end_s=20),
+    )
     result = result.model_copy(
-        update={"evidence": [*result.evidence, failure]}
+        update={
+            "evidence": [
+                *result.evidence,
+                failure,
+                placeholder,
+                inconclusive,
+            ]
+        }
     )
 
     catalog = analysis_source_catalog(result)
@@ -168,6 +193,8 @@ def test_teaching_catalog_deduplicates_aggregate_evidence_and_ignores_errors():
     assert statements.count("钢琴由稀疏单音变为连续和弦") == 1
     assert statements.count("能量曲线在中段持续上升") == 1
     assert all("ReadError" not in statement for statement in statements)
+    assert all("已完成第" not in statement for statement in statements)
+    assert all("定向重听仍无法确认" not in statement for statement in statements)
 
     understanding_map = asyncio.run(
         EvidenceTeachingModel().build_understanding_map(
@@ -194,6 +221,74 @@ def test_teaching_catalog_deduplicates_aggregate_evidence_and_ignores_errors():
         for reference in references
     }
     assert len(references) == len(reference_keys)
+
+
+def test_instrumental_fallback_uses_instrument_tasks_and_conservative_confidence():
+    base = _result()
+    instrumentation = Evidence(
+        id="omni.chunk.1.instrumentation",
+        source="audio-model",
+        kind=EvidenceType.INFERRED,
+        text="该分块识别到的乐器或声部：弦乐组、铜管组。",
+        confidence=0.55,
+        span=TimeSpan(start_s=0, end_s=20),
+        metadata={"teaching_dimension": "instrumentation"},
+    )
+    instrumental = base.model_copy(
+        update={
+            "summary": "管弦乐织体逐步增厚，形成持续推进的听觉过程。",
+            "lyrics": [],
+            "sound_events": [instrumentation],
+            "evidence": [instrumentation, *base.technical_metrics.energy_curve],
+            "vocal_presence": VocalPresenceResult(
+                status=VocalPresenceStatus.INSTRUMENTAL,
+                confidence=0.9,
+                reason="逐块音频分析一致报告无人声。",
+                evidence_ids=["omni.vocal_presence"],
+            ),
+        }
+    )
+    understanding_map = asyncio.run(
+        EvidenceTeachingModel().build_understanding_map(
+            MapGenerationContext(
+                analysis_id="instrumental-1",
+                result=instrumental,
+                duration_s=20,
+                listener_profile=ListenerProfile(),
+            )
+        )
+    )
+
+    validate_understanding_map(
+        understanding_map,
+        result=instrumental,
+        duration_s=20,
+    )
+    assert understanding_map.confidence <= 0.65
+    assert all(not event.lyrics_context for event in understanding_map.events)
+    assert all(
+        "歌词" not in event.listening_task
+        for event in understanding_map.events
+    )
+    assert any(
+        event.audio_evidence[0].dimension
+        is AudioDimension.INSTRUMENTATION
+        or event.listening_task.startswith("每次只追踪一种乐器")
+        for event in understanding_map.events
+    )
+
+    invalid_event = understanding_map.events[0].model_copy(
+        update={"listening_task": "先只听歌词重音，再比较伴奏。"}
+    )
+    invalid_map = understanding_map.model_copy(
+        update={"events": [invalid_event, *understanding_map.events[1:]]}
+    )
+    with pytest.raises(GroundingError, match="vocal listening task"):
+        validate_understanding_map(
+            invalid_map,
+            result=instrumental,
+            duration_s=20,
+        )
 
 
 def test_long_evidence_uses_one_bounded_canonical_statement_everywhere():

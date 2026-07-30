@@ -59,18 +59,12 @@ class FusionEngine:
             item for item in evidence if item.id.endswith(".unavailable")
         ]
         if unavailable_evidence:
-            warnings.append(
-                "质量提示："
-                + "；".join(item.text for item in unavailable_evidence)
-            )
+            warnings.append(_summarize_quality_warning(unavailable_evidence))
         inconclusive_evidence = [
             item for item in evidence if item.id.endswith(".inconclusive")
         ]
         if inconclusive_evidence:
-            warnings.append(
-                "质量提示："
-                + "；".join(item.text for item in inconclusive_evidence)
-            )
+            warnings.append(_summarize_quality_warning(inconclusive_evidence))
 
         return AnalysisResult(
             summary=literary.narrative,
@@ -160,3 +154,20 @@ def _resolve_vocal_presence(
             evidence_ids=[scene_evidence.id] if scene_evidence else [],
         )
     return VocalPresenceResult()
+
+
+def _summarize_quality_warning(values: list[Evidence]) -> str:
+    """Collapse repeated per-chunk diagnostics into one bounded user warning."""
+
+    unique_texts: list[str] = []
+    for item in values:
+        text = item.text.strip()
+        if text and text not in unique_texts:
+            unique_texts.append(text)
+    chunk_count = sum(".chunk." in item.id for item in values)
+    summary = "；".join(unique_texts[:3]) or "部分质量检查没有得到确定结论。"
+    if chunk_count:
+        summary += f"（涉及 {chunk_count} 个音频分块）"
+    if len(unique_texts) > 3:
+        summary += f"；另有 {len(unique_texts) - 3} 类提示"
+    return "质量提示：" + summary

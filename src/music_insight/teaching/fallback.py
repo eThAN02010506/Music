@@ -37,10 +37,16 @@ class EvidenceTeachingModel:
         context: MapGenerationContext,
     ) -> MusicUnderstandingMap:
         result = context.result
+        instrumental = (
+            result.vocal_presence.status is VocalPresenceStatus.INSTRUMENTAL
+        )
         catalog = analysis_source_catalog(result)
         timed_facts = [fact for fact in catalog.values() if fact.span is not None]
         groups = _cluster_facts(timed_facts)
-        sections = _positional_sections(context.duration_s)
+        sections = _positional_sections(
+            context.duration_s,
+            instrumental=instrumental,
+        )
         events: list[UnderstandingEvent] = []
         for index, group in enumerate(groups[:80]):
             span = TeachingTimeSpan(
@@ -81,22 +87,24 @@ class EvidenceTeachingModel:
                 )
             )
             role = (
-                "这一时段为歌曲表达提供局部声音线索；"
+                "这一时段为作品表达提供局部声音线索；"
                 "现有证据不足以断言创作者的唯一意图。"
             )
-            lyrics = _lyrics_for_span(result.lyrics, span)
-            evidence_refs = [_reference(fact) for fact in group[:12]]
-            confidence_values = [
-                fact.confidence
-                for fact in group
-                if fact.confidence is not None
-            ]
-            confidence = (
-                sum(confidence_values) / len(confidence_values)
-                if confidence_values
-                else 0.45
+            lyrics = (
+                []
+                if instrumental
+                else _lyrics_for_span(result.lyrics, span)
             )
-            focus = direct_facts[0].dimension
+            evidence_refs = [_reference(fact) for fact in group[:12]]
+            confidence = _event_confidence(
+                group,
+                has_grounded_interpretation=bool(supplied_interpretations),
+            )
+            focus = _listening_focus(
+                group,
+                direct_facts,
+                instrumental=instrumental,
+            )
             events.append(
                 UnderstandingEvent(
                     id=f"event-{index + 1}",
@@ -112,7 +120,7 @@ class EvidenceTeachingModel:
                     alternative_readings=[
                         "同一声音变化也可能被听成段落推进，而不一定对应固定情绪。"
                     ],
-                    confidence=max(0.0, min(confidence, 0.75)),
+                    confidence=confidence,
                 )
             )
 
@@ -126,7 +134,7 @@ class EvidenceTeachingModel:
         warnings = [
             "当前导赏地图由已有时间证据保守生成；曲式名称和主观意境可能有其他解释。"
         ]
-        if result.vocal_presence.status is VocalPresenceStatus.INSTRUMENTAL:
+        if instrumental:
             warnings.append(
                 "已按纯器乐模式组织导赏；不会补写歌词、主歌或副歌标签。"
             )
@@ -289,23 +297,36 @@ def _cluster_facts(facts: list[SourceFact]) -> list[list[SourceFact]]:
     return groups
 
 
-def _positional_sections(duration_s: float) -> list[SectionMarker]:
+def _positional_sections(
+    duration_s: float,
+    *,
+    instrumental: bool,
+) -> list[SectionMarker]:
     if duration_s <= 30:
         boundaries = [(0.0, duration_s, "全段")]
     else:
         first = duration_s / 3
         second = first * 2
+        labels = (
+            ("听觉阶段 1", "听觉阶段 2", "听觉阶段 3")
+            if instrumental
+            else ("前段", "中段", "后段")
+        )
         boundaries = [
-            (0.0, first, "前段"),
-            (first, second, "中段"),
-            (second, duration_s, "后段"),
+            (0.0, first, labels[0]),
+            (first, second, labels[1]),
+            (second, duration_s, labels[2]),
         ]
     return [
         SectionMarker(
             id=f"section-{index + 1}",
             label=label,
             span=TeachingTimeSpan(start_s=start, end_s=end),
-            expressive_role="用于定位复听的时间分区，并非未经证据确认的主歌或副歌判断。",
+            expressive_role=(
+                "用于定位复听的中性时间分区，并非未经证据确认的曲式判断。"
+                if instrumental
+                else "用于定位复听的时间分区，并非未经证据确认的主歌或副歌判断。"
+            ),
             confidence=0.35,
             alternative_labels=["时间分区"],
         )
@@ -439,7 +460,7 @@ def _answer_ranges(context: TeachingChatContext) -> list[AnswerTimeRange]:
 def _first_sentence(text: str) -> str:
     stripped = text.strip()
     if not stripped:
-        return "现有证据不足以概括歌曲的核心表达。"
+        return "现有证据不足以概括作品的核心表达。"
     return re.split(r"(?<=[。！？.!?])\s*", stripped, maxsplit=1)[0][:1000]
 
 
@@ -477,7 +498,54 @@ def _dimension_label(dimension: AudioDimension) -> str:
 def _map_confidence(events: list[UnderstandingEvent]) -> float:
     if not events:
         return 0.15
-    return min(0.75, sum(event.confidence for event in events) / len(events))
+    return min(0.65, sum(event.confidence for event in events) / len(events))
+
+
+def _event_confidence(
+    facts: list[SourceFact],
+    *,
+    has_grounded_interpretation: bool,
+) -> float:
+    """Keep acoustic certainty separate from expressive interpretation support."""
+
+    known = [
+        fact.confidence
+        for fact in facts
+        if fact.confidence is not None
+    ]
+    acoustic_support = sum(known) / len(known) if known else 0.4
+    dimensions = {fact.dimension for fact in facts}
+    ceiling = 0.65 if has_grounded_interpretation else 0.45
+    if len(dimensions) <= 1:
+        ceiling = min(ceiling, 0.5)
+    return max(0.0, min(acoustic_support, ceiling))
+
+
+def _listening_focus(
+    facts: list[SourceFact],
+    direct_facts: list[SourceFact],
+    *,
+    instrumental: bool,
+) -> AudioDimension:
+    preferred = [
+        fact.dimension
+        for fact in facts
+        if fact.claim_type
+        in {
+            EvidenceClaimType.GROUNDED_INTERPRETATION,
+            EvidenceClaimType.POSSIBLE_READING,
+        }
+        and fact.dimension not in {AudioDimension.OTHER, AudioDimension.LYRICS}
+    ]
+    candidates = [
+        *preferred,
+        *(fact.dimension for fact in direct_facts),
+    ]
+    for dimension in candidates:
+        if instrumental and dimension is AudioDimension.LYRICS:
+            continue
+        return dimension
+    return AudioDimension.OTHER
 
 
 def _dedupe(values) -> list:

@@ -258,7 +258,11 @@ class StructuredOmniAnalysisWorkflow:
                 end_s=end_s,
                 language_hint=language_hint,
             )
-            if not parsed["lyrics"] and not lyrics_recovery_attempted:
+            if (
+                not parsed["lyrics"]
+                and not lyrics_recovery_attempted
+                and not _confident_no_vocals(parsed)
+            ):
                 await self._recover_missing_lyrics(
                     state=state,
                     parsed=parsed,
@@ -341,20 +345,72 @@ class StructuredOmniAnalysisWorkflow:
             )
         if parsed["narrative"]:
             state.narratives.append(parsed["narrative"])
-        state.evidence.append(
-            Evidence(
-                id=f"omni.chunk.{index}.analysis",
-                source=self.adapter.source,
-                kind=EvidenceType.INFERRED,
-                text=(
-                    parsed["narrative"]
-                    or f"已完成第 {index} 个音频分块分析。"
-                ),
-                confidence=0.7,
-                span=TimeSpan(start_s=start_s, end_s=end_s),
-                metadata={"model": model, "basis": "direct audio"},
+        narrative = parsed["narrative"]
+        if narrative:
+            support_confidences = [
+                item.confidence
+                for item in parsed["sound_events"]
+                if item.confidence is not None
+            ]
+            narrative_confidence = (
+                min(
+                    0.65,
+                    sum(support_confidences) / len(support_confidences),
+                )
+                if support_confidences
+                else 0.55
             )
-        )
+            state.evidence.append(
+                Evidence(
+                    id=f"omni.chunk.{index}.analysis",
+                    source=self.adapter.source,
+                    kind=EvidenceType.INFERRED,
+                    text=narrative,
+                    confidence=narrative_confidence,
+                    span=TimeSpan(start_s=start_s, end_s=end_s),
+                    metadata={
+                        "model": model,
+                        "basis": "direct audio",
+                        "teaching_dimension": (
+                            "instrumentation"
+                            if parsed["instruments"]
+                            else "other"
+                        ),
+                    },
+                )
+            )
+        elif parsed["instruments"]:
+            state.evidence.append(
+                Evidence(
+                    id=f"omni.chunk.{index}.instrumentation",
+                    source=self.adapter.source,
+                    kind=EvidenceType.INFERRED,
+                    text=(
+                        "该分块识别到的乐器或声部："
+                        + "、".join(parsed["instruments"][:8])
+                        + "。"
+                    ),
+                    confidence=0.55,
+                    span=TimeSpan(start_s=start_s, end_s=end_s),
+                    metadata={
+                        "model": model,
+                        "basis": "direct audio",
+                        "teaching_dimension": "instrumentation",
+                    },
+                )
+            )
+        elif not parsed["sound_events"] and not parsed["emotions"]:
+            state.evidence.append(
+                Evidence(
+                    id=f"omni.chunk.{index}.analysis.inconclusive",
+                    source=self.adapter.source,
+                    kind=EvidenceType.OBSERVED,
+                    text="该分块未返回可用于导赏的语义声音证据。",
+                    confidence=0.0,
+                    span=TimeSpan(start_s=start_s, end_s=end_s),
+                    metadata={"model": model, "diagnostic": True},
+                )
+            )
         await self._notify_chunk_complete(
             index=index,
             total_chunks=total_chunks,
@@ -400,6 +456,7 @@ class StructuredOmniAnalysisWorkflow:
             recovered_lyrics, recovered_issues = (
                 self.adapter._filter_lyrics_quality(recovered["lyrics"])
             )
+            _merge_recovered_vocal_presence(parsed, recovered)
             if recovered_lyrics and not recovered_issues:
                 parsed["lyrics"] = recovered_lyrics
                 outcome = "定向重听已替换异常歌词时间轴。"
@@ -471,6 +528,11 @@ class StructuredOmniAnalysisWorkflow:
         language_hint: str | None,
     ) -> None:
         missing = ["lyrics"]
+        if (
+            parsed["vocals_detected"] is None
+            or parsed["vocal_confidence"] is None
+        ):
+            missing.extend(["vocals_detected", "vocal_confidence"])
         try:
             recovered_payload = await self.adapter._recover_missing(
                 model=model,
@@ -508,6 +570,10 @@ class StructuredOmniAnalysisWorkflow:
                             metadata={"issues": quality_issues},
                         )
                     )
+            if _merge_recovered_vocal_presence(parsed, recovered):
+                recovered_fields.extend(
+                    ["vocals_detected", "vocal_confidence"]
+                )
             if recovered_fields:
                 state.evidence.append(
                     Evidence(
@@ -521,19 +587,29 @@ class StructuredOmniAnalysisWorkflow:
                             "requested_fields": missing,
                             "recovered_fields": recovered_fields,
                             "model": model,
+                            "diagnostic": True,
                         },
                     )
                 )
-            else:
+            if not parsed["lyrics"] and not _confident_no_vocals(parsed):
+                vocals_detected = parsed["vocals_detected"]
+                text = (
+                    "定向重听检测到人声，但仍未确认可靠歌词。"
+                    if vocals_detected is True
+                    else "定向重听仍无法确认可靠歌词或人声状态。"
+                )
                 state.evidence.append(
                     Evidence(
-                        id=f"omni.chunk.{index}.recovery.unavailable",
+                        id=f"omni.chunk.{index}.recovery.inconclusive",
                         source=self.adapter.source,
                         kind=EvidenceType.OBSERVED,
-                        text="定向重听仍未确认可靠歌词或人声情绪。",
+                        text=text,
                         confidence=0.0,
                         span=TimeSpan(start_s=start_s, end_s=end_s),
-                        metadata={"requested_fields": missing},
+                        metadata={
+                            "requested_fields": missing,
+                            "diagnostic": True,
+                        },
                     )
                 )
         except Exception as exc:
@@ -815,6 +891,37 @@ class StructuredOmniAnalysisWorkflow:
                 evidence=[],
             ),
         )
+
+
+def _confident_no_vocals(parsed: dict[str, Any]) -> bool:
+    """Return whether a chunk has an explicit, sufficiently strong no-voice result."""
+
+    return (
+        parsed.get("vocals_detected") is False
+        and isinstance(parsed.get("vocal_confidence"), (int, float))
+        and float(parsed["vocal_confidence"]) >= 0.7
+    )
+
+
+def _merge_recovered_vocal_presence(
+    parsed: dict[str, Any],
+    recovered: dict[str, Any],
+) -> bool:
+    """Fill an incomplete vocal judgment only from a complete recovered pair."""
+
+    if (
+        parsed.get("vocals_detected") is not None
+        and parsed.get("vocal_confidence") is not None
+    ):
+        return False
+    if (
+        recovered.get("vocals_detected") is None
+        or recovered.get("vocal_confidence") is None
+    ):
+        return False
+    parsed["vocals_detected"] = recovered["vocals_detected"]
+    parsed["vocal_confidence"] = recovered["vocal_confidence"]
+    return True
 
 
 def _aggregate_vocal_presence(
