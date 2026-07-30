@@ -73,21 +73,24 @@ export function SingingScoreResult({ score }: { score: SingingScore }) {
 export function SingingComparison({ historyId }: { historyId: string | null }) {
   const [attempt, setAttempt] = useState<Blob | null>(null);
   const [attemptName, setAttemptName] = useState("my-singing.webm");
-  const attemptObjectUrl = useObjectUrl();
+  const {
+    url: attemptUrl,
+    setBlob: setAttemptBlob,
+  } = useObjectUrl();
   const [score, setScore] = useState<SingingScore | null>(null);
   const [scoring, setScoring] = useState(false);
   const [error, setError] = useState("");
 
-  const useAttempt = useCallback((blob: Blob, name: string) => {
+  const applyAttempt = useCallback((blob: Blob, name: string) => {
     setAttempt(blob);
     setAttemptName(name);
-    attemptObjectUrl.setBlob(blob);
+    setAttemptBlob(blob);
     setScore(null);
     setError("");
-  }, [attemptObjectUrl.setBlob]);
+  }, [setAttemptBlob]);
 
   const audioRecorder = useAudioRecorder({
-    onRecorded: useAttempt,
+    onRecorded: applyAttempt,
     onError: (cause) => setError(cause.message),
   });
 
@@ -153,7 +156,7 @@ export function SingingComparison({ historyId }: { historyId: string | null }) {
             disabled={scoring || audioRecorder.busy}
             onChange={(event) => {
               const file = event.target.files?.[0];
-              if (file) useAttempt(file, file.name);
+              if (file) applyAttempt(file, file.name);
             }}
           />
         </label>
@@ -171,7 +174,7 @@ export function SingingComparison({ historyId }: { historyId: string | null }) {
           {scoring ? "正在对齐音高与节奏…" : "开始评分"}
         </button>
       </div>
-      {attemptObjectUrl.url && <audio src={attemptObjectUrl.url} controls preload="metadata" />}
+      {attemptUrl && <audio src={attemptUrl} controls preload="metadata" />}
       {error && <p className="singing-error">{error}</p>}
       {score && <SingingScoreResult score={score} />}
     </section>
@@ -180,17 +183,23 @@ export function SingingComparison({ historyId }: { historyId: string | null }) {
 
 export function StandaloneSingingComparison() {
   const [reference, setReference] = useState<File | null>(null);
-  const referenceObjectUrl = useObjectUrl();
+  const {
+    url: referenceUrl,
+    setBlob: setReferenceBlob,
+  } = useObjectUrl();
   const [performance, setPerformance] = useState<Blob | null>(null);
   const [performanceName, setPerformanceName] = useState("my-singing.webm");
-  const performanceObjectUrl = useObjectUrl();
+  const {
+    url: performanceUrl,
+    setBlob: setPerformanceBlob,
+  } = useObjectUrl();
   const [scoring, setScoring] = useState(false);
   const [score, setScore] = useState<SingingScore | null>(null);
   const [error, setError] = useState("");
 
   const chooseReference = (file: File) => {
     setReference(file);
-    referenceObjectUrl.setBlob(file);
+    setReferenceBlob(file);
     setScore(null);
     setError("");
   };
@@ -198,10 +207,10 @@ export function StandaloneSingingComparison() {
   const choosePerformance = useCallback((blob: Blob, name: string) => {
     setPerformance(blob);
     setPerformanceName(name);
-    performanceObjectUrl.setBlob(blob);
+    setPerformanceBlob(blob);
     setScore(null);
     setError("");
-  }, [performanceObjectUrl.setBlob]);
+  }, [setPerformanceBlob]);
 
   const audioRecorder = useAudioRecorder({
     onRecorded: choosePerformance,
@@ -274,7 +283,7 @@ export function StandaloneSingingComparison() {
             />
           </label>
           {reference && <strong className="audio-file-name">{reference.name}</strong>}
-          {referenceObjectUrl.url && <audio src={referenceObjectUrl.url} controls preload="metadata" />}
+          {referenceUrl && <audio src={referenceUrl} controls preload="metadata" />}
         </article>
         <article className={performance ? "ready" : ""}>
           <span className="audio-step">02</span>
@@ -311,7 +320,7 @@ export function StandaloneSingingComparison() {
             </button>
           </div>
           {performance && <strong className="audio-file-name">{performanceName}</strong>}
-          {performanceObjectUrl.url && <audio src={performanceObjectUrl.url} controls preload="metadata" />}
+          {performanceUrl && <audio src={performanceUrl} controls preload="metadata" />}
         </article>
       </div>
       <div className="standalone-score-action">

@@ -2,7 +2,6 @@ import {
   useCallback,
   useEffect,
   useReducer,
-  useRef,
   useState,
 } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
@@ -78,7 +77,7 @@ export function AuthenticatedWorkspace({
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
-  const viewRequestRef = useRef(new LatestRequest());
+  const [viewRequests] = useState(() => new LatestRequest());
   const file = selectedFile(workspace);
   const fileName = selectedFileName(workspace);
   const activeId = activeHistoryId(workspace);
@@ -122,7 +121,7 @@ export function AuthenticatedWorkspace({
     invalidateRequests,
   } = useHistoryNavigation({
     dispatch,
-    viewRequests: viewRequestRef.current,
+    viewRequests,
   });
 
   const { analyze, creatingJob } = useAnalysisSubmission({
@@ -135,7 +134,7 @@ export function AuthenticatedWorkspace({
     localModelPath,
     runtimeConfig,
     dispatch,
-    viewRequests: viewRequestRef.current,
+    viewRequests,
     refreshHistory,
   });
 
@@ -153,7 +152,7 @@ export function AuthenticatedWorkspace({
   const busy = creatingJob || jobBusy;
 
   const chooseFile = (next: File) => {
-    viewRequestRef.current.invalidate();
+    viewRequests.invalidate();
     setUploadBlob(next);
     dispatch({ type: "file-chosen", file: next });
     setInputSource("file");
@@ -323,7 +322,7 @@ export function AuthenticatedWorkspace({
                     busy={busy}
                     onFile={chooseFile}
                     onInputSource={(source) => {
-                      viewRequestRef.current.invalidate();
+                      viewRequests.invalidate();
                       setInputSource(source);
                       dispatch({ type: "new-analysis" });
                     }}

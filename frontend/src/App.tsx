@@ -52,8 +52,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const authRequests = authRequestsRef.current;
     void verifySession(true);
-    return () => authRequestsRef.current.invalidate();
+    return () => authRequests.invalidate();
   }, [verifySession]);
 
   useEffect(() => {

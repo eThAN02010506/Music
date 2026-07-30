@@ -35,11 +35,11 @@ def _limit_detail(limit: int) -> str:
 class RequestBodyLimitMiddleware:
     """Reject oversized bodies before Starlette parses multipart uploads."""
 
-    _ONE_FILE_ROUTES = {
+    _ONE_FILE_ROUTES = frozenset({
         "/jobs",
         "/analyze",
         "/analyze/markdown",
-    }
+    })
     _HISTORY_SCORE_ROUTE = re.compile(
         r"^/history/[^/]+/singing/score$"
     )

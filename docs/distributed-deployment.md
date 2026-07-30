@@ -52,6 +52,7 @@ export MUSIC_INSIGHT_REDIS_JOB_TTL_SECONDS=604800
 export MUSIC_INSIGHT_DIRECT_WORK_LEASE_TTL_SECONDS=3600
 export MUSIC_INSIGHT_CELERY_QUEUE_NAME=music-insight.analysis
 export MUSIC_INSIGHT_CELERY_VISIBILITY_TIMEOUT_SECONDS=14400
+export MUSIC_INSIGHT_CELERY_SOFT_TIME_LIMIT_SECONDS=13800
 # 可选：所有 Worker 必须使用相同的歌词验证配置
 # export MUSIC_INSIGHT_ASR_VERIFIER_ENABLED=true
 # export MUSIC_INSIGHT_ASR_VERIFIER_ENDPOINT=http://192.168.1.97:8003
@@ -69,6 +70,9 @@ export MUSIC_INSIGHT_CELERY_VISIBILITY_TIMEOUT_SECONDS=14400
 `MUSIC_INSIGHT_CELERY_VISIBILITY_TIMEOUT_SECONDS` 必须长于最慢任务；否则 Redis
 broker 可能在原 Worker 仍运行时重新投递。任务发布采用幂等终态写入，即使发生
 至少一次投递也不会覆盖已经发布的终态，但重复推理仍会浪费模型资源。
+`MUSIC_INSIGHT_CELERY_SOFT_TIME_LIMIT_SECONDS` 提供更短的 Python 任务级软
+上限，超时会先让 Worker 记录失败终态；没有启用硬杀死上限，因为它与
+`reject_on_worker_lost` 组合可能持续重投同一个确定性卡死任务。
 
 ## 启动
 
@@ -140,7 +144,8 @@ PYTHONPATH=src python scripts/redis_celery_smoke.py
 - Celery 使用 JSON-only serializer，消息中只携带随机任务 ID；Worker 从
   Redis 重新读取服务端创建的规范任务参数，避免信任消息内的路径或模型地址。
   同时启用 late ACK、`reject_on_worker_lost` 和预取 1；Worker 异常退出时
-  任务由 broker 重新投递。
+  任务由 broker 重新投递。Celery 自身不再保存一份重复 result；页面所需的
+  权威结果、进度与错误全部来自 Music Insight 的 Redis job store。
 - Redis Lua 脚本同时执行全局和每用户容量预留，多个 API 进程不能绕过上限。
 - API 直接工作租约跨进程共享，并由心跳延长；API 崩溃后租约会在
   `MUSIC_INSIGHT_DIRECT_WORK_LEASE_TTL_SECONDS` 内自动回收。Celery Worker

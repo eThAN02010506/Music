@@ -88,8 +88,12 @@ class OpenAIAsrVerifier(AsrVerifier):
             "temperature": "0",
         }
         if self.dialect == "openai_whisper":
-            assert self.model is not None
-            data["model"] = self.model
+            model = self.model
+            if model is None:
+                raise RuntimeError(
+                    "OpenAI Whisper verifier lost its configured model."
+                )
+            data["model"] = model
             data["timestamp_granularities[]"] = "segment"
         elif self.model:
             data["model"] = self.model

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Self
 
@@ -203,7 +204,7 @@ class MusicUnderstandingMap(TeachingModel):
         ]
         if unknown:
             raise ValueError(f"key moments reference unknown events: {unknown[:3]}")
-        for previous, current in zip(self.sections, self.sections[1:]):
+        for previous, current in pairwise(self.sections):
             if current.span.start_s < previous.span.end_s:
                 raise ValueError("sections must not overlap")
         return self

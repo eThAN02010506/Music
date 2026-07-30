@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
 import inspect
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from music_insight.adapters.base import UnifiedAudioAdapter
 from music_insight.adapters.openai_compat_utils import parse_json_object
@@ -100,8 +100,8 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
     OpenAI HTTP and Comni WebSocket protocols remain isolated.
     """
 
-    source = "统一音频模型"
-    placeholder_values = {
+    source: ClassVar[str] = "统一音频模型"
+    placeholder_values: ClassVar[set[str]] = {
         "原文",
         "歌词",
         "声源",
@@ -118,13 +118,13 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
         "emotion",
         "theme",
     }
-    label_aliases = {
+    label_aliases: ClassVar[dict[str, str]] = {
         "electricguitar": "electric guitar",
         "acousticguitar": "acoustic guitar",
         "bassguitar": "bass guitar",
         "indierock": "indie rock",
     }
-    atmosphere_aliases = {
+    atmosphere_aliases: ClassVar[dict[str, str]] = {
         "愉快": "欢快",
         "快乐": "欢快",
         "平静": "宁静",

@@ -16,7 +16,6 @@ dependencies = [
     "pydantic>=2.8.0",
     "pydantic-settings>=2.4.0",
     "python-multipart>=0.0.9",
-    "streamlit>=1.40.0",
     "starlette>=1.2.1,<2",
     "uvicorn[standard]>=0.30.0",
     "websockets>=15.0,<17",
@@ -46,10 +45,11 @@ filterwarnings = [
 ]
 
 [tool.ruff.lint]
-# Keep the mandatory gate focused on syntax/import correctness. The existing
-# codebase intentionally catches adapter failures for graceful DSP/model
-# degradation, so broad style/exception rules are reviewed separately.
-select = ["E4", "E7", "E9", "F"]
+# Keep the mandatory gate focused on syntax/import correctness plus a small
+# set of unambiguous bug patterns. The codebase intentionally catches adapter
+# failures for graceful DSP/model degradation, so broad exception/style rule
+# families are reviewed separately instead of enabled wholesale.
+select = ["E4", "E7", "E9", "F", "B018", "B904", "B905", "RUF012"]
 
 [build-system]
 requires = ["setuptools>=68"]

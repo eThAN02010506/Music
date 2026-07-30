@@ -370,7 +370,7 @@ async def _acquire_file_lock(path: Path, *, timeout_seconds: int):
                     raise StemSeparationError(
                         "等待相同音频的分轨任务超时。",
                         timed_out=True,
-                    )
+                    ) from None
                 await asyncio.sleep(0.25)
     except BaseException:
         lock.close()

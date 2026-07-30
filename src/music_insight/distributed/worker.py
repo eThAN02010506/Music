@@ -111,7 +111,10 @@ async def run_distributed_analysis(
             "state": terminal.state.value if terminal else "missing",
         }
     except DistributedJobCancelled:
-        assert payload is not None
+        if payload is None:
+            raise RuntimeError(
+                "Distributed cancellation arrived before payload loading."
+            ) from None
         await jobs.finish(
             payload.job_id,
             payload.owner_user_id,

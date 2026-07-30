@@ -34,7 +34,7 @@ def validate_model_endpoint(value: str) -> str:
     if parsed.query or parsed.fragment:
         raise ValueError("Model endpoint must not contain a query or fragment.")
     try:
-        parsed.port
+        _ = parsed.port
     except ValueError as exc:
         raise ValueError("Model endpoint contains an invalid port.") from exc
     return endpoint

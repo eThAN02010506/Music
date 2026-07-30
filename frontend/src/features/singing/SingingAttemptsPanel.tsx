@@ -113,11 +113,12 @@ export function SingingAttemptsPanel({
   }, [publishAttempts]);
 
   useEffect(() => {
+    const requests = requestsRef.current;
     mountedRef.current = true;
     void load(true);
     return () => {
       mountedRef.current = false;
-      requestsRef.current.invalidate();
+      requests.invalidate();
     };
   }, [load]);
 

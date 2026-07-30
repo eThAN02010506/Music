@@ -190,7 +190,9 @@ def test_redis_job_cancel_releases_capacity_and_worker_observes_flag():
     assert terminal.result_url is None
 
 
-def test_celery_redis_configuration_is_json_only_and_late_acknowledged(tmp_path):
+def test_celery_redis_configuration_is_bounded_and_does_not_duplicate_results(
+    tmp_path,
+):
     settings = Settings(
         workspace_dir=tmp_path,
         job_backend="redis",
@@ -200,13 +202,40 @@ def test_celery_redis_configuration_is_json_only_and_late_acknowledged(tmp_path)
     app = create_celery_app(settings)
 
     assert app.conf.broker_url == settings.redis_url
-    assert app.conf.result_backend == settings.redis_url
+    assert app.conf.result_backend is None
     assert app.conf.accept_content == ["json"]
     assert app.conf.task_serializer == "json"
     assert app.conf.task_acks_late is True
+    assert app.conf.task_acks_on_failure_or_timeout is True
+    assert app.conf.task_ignore_result is True
     assert app.conf.task_reject_on_worker_lost is True
+    assert app.conf.task_soft_time_limit == (
+        settings.celery_soft_time_limit_seconds
+    )
+    assert app.conf.worker_cancel_long_running_tasks_on_connection_loss is True
     assert app.conf.worker_prefetch_multiplier == 1
     assert app.conf.task_routes[TASK_NAME]["queue"] == settings.celery_queue_name
+
+
+def test_celery_soft_limit_must_fit_inside_visibility_and_job_ttl(tmp_path):
+    shared = tmp_path / "shared-audio"
+    with pytest.raises(ValueError, match="shorter than"):
+        Settings(
+            workspace_dir=tmp_path,
+            job_backend="redis",
+            shared_audio_dir=shared,
+            celery_soft_time_limit_seconds=3600,
+            celery_visibility_timeout_seconds=3600,
+        )
+    with pytest.raises(ValueError, match="must outlive"):
+        Settings(
+            workspace_dir=tmp_path,
+            job_backend="redis",
+            shared_audio_dir=shared,
+            celery_soft_time_limit_seconds=3600,
+            celery_visibility_timeout_seconds=7200,
+            redis_job_ttl_seconds=3600,
+        )
 
 
 def test_distributed_worker_rejects_cross_owner_or_changed_audio(tmp_path):

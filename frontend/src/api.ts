@@ -23,6 +23,7 @@ import type {
   TeachingMessage,
   User,
 } from "./types";
+import { formatApiErrorDetail } from "./apiError";
 
 export const API_BASE = (
   import.meta.env.VITE_API_BASE_URL || "/api"
@@ -67,7 +68,10 @@ async function request<T>(
     signal: options.signal ?? init?.signal,
   });
   if (!response.ok) {
-    const detail = await response.text();
+    const detail = formatApiErrorDetail(
+      await response.text(),
+      response.statusText,
+    );
     if (
       response.status === 401
       && !options.ignoreAuthExpiry

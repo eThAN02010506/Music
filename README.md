@@ -20,9 +20,9 @@ Music Insight 是一个本地优先、证据驱动的音乐理解与演唱练习
 - 内存任务模式，以及可选的 Redis/Celery 跨进程分析 Worker。
 
 正式界面使用 React + TypeScript + Vite，FastAPI 提供认证、异步任务、
-SSE 进度、历史和导赏 API；Streamlit 只保留为兼容调试台。模型权重、
-运行时缓存和 `test_samples/` 中的本地测试音频由 `.gitignore` 排除；放在
-项目根目录等其他位置的个人媒体文件仍应避免加入 Git。
+SSE 进度、历史、导赏 API 和开发监控台。模型权重、运行时缓存和
+`test_samples/` 中的本地测试音频由 `.gitignore` 排除；放在项目根目录等
+其他位置的个人媒体文件仍应避免加入 Git。
 
 文档导航：
 [快速开始](#快速开始) ·
@@ -418,19 +418,6 @@ FastAPI 根地址 `http://127.0.0.1:8000/` 是开发监控台，可实时查看�
 监控数据按当前浏览器已登录账号隔离；未登录时应先在正式界面登录。原服务
 信息 JSON 位于 `/api/info`，交互式 API 文档位于 `/docs`。
 
-### Streamlit 兼容调试台
-
-Streamlit 不再是正式产品界面，仅保留用于兼容旧调试流程：
-
-```bash
-PYTHONPATH=src streamlit run src/music_insight/ui/streamlit_app.py --server.port 8501
-```
-
-调试台：`http://127.0.0.1:8501`
-
-Streamlit 调试台也需要填写已在正式界面创建的本地账号和密码，才能调用受
-保护的 `/analyze` 接口。
-
 ## API
 
 公开数据接口只有 `/health`、`/api/info`、API 文档、`/auth/register` 和
@@ -651,15 +638,18 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/pytest -q
 .venv/bin/ruff check .
 
 cd frontend
+pnpm lint
 pnpm test
 pnpm build
 
 curl --fail http://127.0.0.1:8000/health
 ```
 
-后端与前端测试数量会随功能增长，不在文档中固定。`pnpm build` 会执行
-TypeScript 检查并生成 `frontend/dist/`；FastAPI 不直接托管该目录，生产环境
-应由静态服务器或反向代理提供前端文件。真实模型 E2E 还取决于所配置 Provider，
+后端与前端测试数量会随功能增长，不在文档中固定。前端同时使用 TypeScript 7
+执行快速构建，并按 TypeScript 官方过渡方案保留 TypeScript 6 API 供
+typescript-eslint 检查 React Hooks；`pnpm build` 会执行 TypeScript 检查并
+生成 `frontend/dist/`。FastAPI 不直接托管该目录，生产环境应由静态服务器或
+反向代理提供前端文件。真实模型 E2E 还取决于所配置 Provider，
 发布前应另外用一段已知歌词和段落的短音频验证模型能力与证据时间轴。
 若启用独立 ASR，还应分别验证一段有人声和一段静音/纯器乐样例，确认“带
 明确无人声证据”“无证据空转写”和“服务不可用”会走三种不同的证据状态。
@@ -680,7 +670,6 @@ src/music_insight/
   reporting/     # Markdown 报告
   storage/       # 上传、资产引用与安全 GC
   teaching/      # 导赏领域模型、证据检索、grounding 与保守降级
-  ui/            # Streamlit 调试台
 ```
 
 供应商无关的结构化输出协议、请求构造、JSON Schema 校验、解析、音频切块和

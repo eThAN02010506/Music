@@ -65,6 +65,11 @@ class Settings(BaseSettings):
         ge=3600,
         le=7 * 24 * 60 * 60,
     )
+    celery_soft_time_limit_seconds: int = Field(
+        default=3 * 60 * 60 + 50 * 60,
+        ge=300,
+        le=7 * 24 * 60 * 60,
+    )
 
     omni_endpoint: str = "http://192.168.1.97:8004"
     omni_completions_path: str = "/v1/chat/completions"
@@ -126,6 +131,24 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_distributed_workspace(self) -> "Settings":
+        if (
+            self.job_backend == "redis"
+            and self.celery_soft_time_limit_seconds
+            >= self.celery_visibility_timeout_seconds
+        ):
+            raise ValueError(
+                "celery_soft_time_limit_seconds must be shorter than "
+                "celery_visibility_timeout_seconds"
+            )
+        if (
+            self.job_backend == "redis"
+            and self.redis_job_ttl_seconds
+            <= self.celery_soft_time_limit_seconds
+        ):
+            raise ValueError(
+                "redis_job_ttl_seconds must outlive "
+                "celery_soft_time_limit_seconds"
+            )
         if (
             self.asr_verifier_enabled
             and self.asr_verifier_dialect == "openai_whisper"

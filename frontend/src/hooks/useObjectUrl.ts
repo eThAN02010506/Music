@@ -30,7 +30,7 @@ export class ObjectUrlSlot {
 
 export function useObjectUrl() {
   const slotRef = useRef<ObjectUrlSlot | null>(null);
-  if (!slotRef.current) slotRef.current = new ObjectUrlSlot(URL);
+  if (slotRef.current === null) slotRef.current = new ObjectUrlSlot(URL);
   const [url, setUrl] = useState("");
 
   const setBlob = useCallback((blob: Blob | null) => {

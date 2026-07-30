@@ -47,9 +47,10 @@ export function useHistoryNavigation({
   }, []);
 
   useEffect(() => {
+    const requests = historyRequests.current;
     refreshHistory();
     return () => {
-      historyRequests.current.invalidate();
+      requests.invalidate();
     };
   }, [refreshHistory]);
 

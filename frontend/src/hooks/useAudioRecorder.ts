@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   AudioRecorderController,
   type AudioRecorderDependencies,
@@ -30,25 +30,23 @@ export function useAudioRecorder({
   createRecorder = defaultDependencies.createRecorder,
   controller: injectedController,
 }: UseAudioRecorderOptions) {
-  const controllerRef = useRef<AudioRecorderController | null>(null);
-  const lifecycleRef = useRef(0);
-  if (!controllerRef.current) {
-    controllerRef.current = injectedController || new AudioRecorderController(
+  const [lifecycle] = useState(() => ({ generation: 0 }));
+  const [controller] = useState(() => (
+    injectedController || new AudioRecorderController(
       { getUserMedia, createRecorder },
       { onRecorded, onError },
-    );
-  }
-  const controller = controllerRef.current;
+    )
+  ));
   const [snapshot, setSnapshot] = useState<AudioRecorderSnapshot>(
     controller.getSnapshot,
   );
 
   useEffect(() => {
     controller.setCallbacks({ onRecorded, onError });
-  }, [onError, onRecorded]);
+  }, [controller, onError, onRecorded]);
 
   useEffect(() => {
-    const lifecycle = ++lifecycleRef.current;
+    const generation = ++lifecycle.generation;
     setSnapshot(controller.getSnapshot());
     const unsubscribe = controller.subscribe(setSnapshot);
     return () => {
@@ -56,10 +54,10 @@ export function useAudioRecorder({
       // React StrictMode immediately replays effects in development. Deferring
       // disposal by one microtask distinguishes that replay from a real unmount.
       queueMicrotask(() => {
-        if (lifecycleRef.current === lifecycle) controller.dispose();
+        if (lifecycle.generation === generation) controller.dispose();
       });
     };
-  }, [controller]);
+  }, [controller, lifecycle]);
 
   const start = useCallback(() => controller.start(), [controller]);
   const stop = useCallback(() => controller.stop(), [controller]);
