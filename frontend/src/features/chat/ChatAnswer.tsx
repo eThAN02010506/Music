@@ -1,4 +1,5 @@
 import { percent } from "../../format";
+import { useI18n } from "../../i18n";
 import type {
   AnswerTimeRange,
   TeachingChatResponse,
@@ -52,6 +53,7 @@ export function ChatAnswer({
   response: TeachingChatResponse;
   onSuggestedQuestion: (question: string) => void;
 }) {
+  const { t } = useI18n();
   const player = usePlayer();
   const listeningRange = findRange(
     response,
@@ -60,14 +62,14 @@ export function ChatAnswer({
   return (
     <article className="chat-answer">
       <div className="answer-heading">
-        <span>导赏老师</span>
+        <span>{t("导赏老师")}</span>
         <small>
-          支持度 {percent(response.confidence)}
+          {t("支持度")} {percent(response.confidence)}
           {response.insufficient_evidence
-            ? " · 证据不足模式"
+            ? ` · ${t("证据不足模式")}`
             : response.relistened
-              ? " · 已局部重听"
-              : " · 基于已有证据"}
+              ? ` · ${t("已局部重听")}`
+              : ` · ${t("基于已有证据")}`}
         </small>
       </div>
       <p className="answer-copy">{response.answer}</p>
@@ -84,7 +86,7 @@ export function ChatAnswer({
 
       {response.evidence.length > 0 && (
         <details className="answer-evidence" open>
-          <summary>听觉证据</summary>
+          <summary>{t("听觉证据")}</summary>
           {response.evidence.map((evidence) => {
             const rangeIds = [...new Set(evidence.time_range_ids)];
             const ranges = rangeIds.flatMap((id) => {
@@ -98,9 +100,9 @@ export function ChatAnswer({
               >
                 <div className="answer-evidence-labels">
                   <span className="answer-claim-label">
-                    {CLAIM_LABELS[evidence.claim_type]}
+                    {t(CLAIM_LABELS[evidence.claim_type])}
                   </span>
-                  <strong>{DIMENSION_LABELS[evidence.dimension]}</strong>
+                  <strong>{t(DIMENSION_LABELS[evidence.dimension])}</strong>
                 </div>
                 <p>{evidence.statement}</p>
                 {ranges.length > 0 && (
@@ -114,7 +116,7 @@ export function ChatAnswer({
                     ))}
                   </div>
                 )}
-                <small>支持度 {percent(evidence.confidence)}</small>
+                <small>{t("支持度")} {percent(evidence.confidence)}</small>
               </div>
             );
           })}
@@ -122,12 +124,12 @@ export function ChatAnswer({
       )}
 
       <div className="answer-listening-task">
-        <span>马上复听</span>
+        <span>{t("马上复听")}</span>
         <p>{response.listening_task.instruction}</p>
         {listeningRange && (
           <TimeRangeButton
             range={listeningRange}
-            label="循环这个任务"
+            label={t("循环这个任务")}
             loop
           />
         )}
@@ -153,7 +155,7 @@ export function ChatAnswer({
 
       {response.alternative_readings.length > 0 && (
         <details className="alternative-readings">
-          <summary>其他可能理解</summary>
+          <summary>{t("其他可能理解")}</summary>
           {response.alternative_readings.map((reading) => (
             <p key={reading}>{reading}</p>
           ))}
@@ -162,7 +164,7 @@ export function ChatAnswer({
 
       {response.warnings.length > 0 && (
         <details className="answer-warnings">
-          <summary>回答的不确定性与降级说明</summary>
+          <summary>{t("回答的不确定性与降级说明")}</summary>
           {response.warnings.map((warning) => (
             <p key={warning}>{warning}</p>
           ))}
@@ -171,7 +173,7 @@ export function ChatAnswer({
 
       {response.suggested_questions.length > 0 && (
         <div className="suggested-questions">
-          <span>可以继续问</span>
+          <span>{t("可以继续问")}</span>
           {response.suggested_questions.map((question) => (
             <button
               type="button"

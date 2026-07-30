@@ -103,6 +103,11 @@ body::before {
 .signal-mark { width: 40px; height: 42px; display: flex; gap: 3px; align-items: center; justify-content: center; }
 .signal-mark span { display: block; width: 3px; border-radius: 4px; background: var(--accent); }
 .topbar-actions { display: flex; min-width: 0; align-items: center; gap: 10px; }
+.language-switcher { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: rgba(17, 27, 24, .88); }
+.language-switcher button { min-width: 42px; height: 32px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font: 650 9px "DM Mono", ui-monospace, monospace; letter-spacing: .25px; transition: color .2s, background .2s, box-shadow .2s; }
+.language-switcher button:hover { color: var(--ink); }
+.language-switcher button.active { background: var(--accent); color: #0b130d; box-shadow: 0 2px 9px rgba(167, 240, 123, .12); }
+.language-switcher.compact button { min-width: 34px; }
 .service-status { display: flex; align-items: center; gap: 10px; }
 .service-status > span { width: 8px; height: 8px; border-radius: 50%; }
 .service-status .online { background: var(--accent); box-shadow: 0 0 0 5px rgba(167,240,123,.08); }
@@ -594,7 +599,8 @@ audio { width: min(520px, 100%); height: 34px; filter: invert(.88) hue-rotate(60
 .app-loading strong { font: 600 20px "Space Grotesk", sans-serif; }
 .app-loading > span { color: var(--muted); font-size: 10px; }
 
-.auth-shell { width: min(1160px, calc(100% - 40px)); min-height: 100vh; margin: 0 auto; padding: 56px 0; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(360px, .75fr); gap: 70px; align-items: center; }
+.auth-shell { position: relative; width: min(1160px, calc(100% - 40px)); min-height: 100vh; margin: 0 auto; padding: 56px 0; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(360px, .75fr); gap: 70px; align-items: center; }
+.auth-language { position: absolute; z-index: 2; top: 22px; right: 0; }
 .auth-intro { min-height: 620px; padding: 12px 54px 12px 8px; display: flex; flex-direction: column; justify-content: space-between; border-right: 1px solid var(--line); }
 .auth-brand { display: flex; align-items: center; gap: 13px; font: 600 19px "Space Grotesk", sans-serif; }
 .auth-intro h1 { max-width: 680px; margin: 17px 0 20px; font: 600 clamp(45px, 5vw, 70px)/1.08 "Space Grotesk", "Noto Sans SC", sans-serif; letter-spacing: -2.5px; }
@@ -807,6 +813,9 @@ footer { width: min(1180px, calc(100% - 48px)); margin: 0 auto; border-top: 1px 
   .topbar-model-settings > summary { min-width: 44px; padding: 0 7px; }
   .topbar-model-settings > summary > span:nth-child(2),
   .topbar-model-settings > summary .settings-chevron { display: none; }
+  .language-switcher.compact { padding: 2px; }
+  .language-switcher.compact button { min-width: 29px; height: 30px; font-size: 8px; }
+  .auth-language { top: 10px; }
   main { width: min(100% - 24px, 1180px); padding-top: 25px; }
   .upload-card { padding: 26px 20px; }
   .upload-intro { margin-bottom: 25px; }

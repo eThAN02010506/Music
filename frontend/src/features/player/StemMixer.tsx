@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, API_BASE, isAbortError } from "../../api";
+import { useI18n } from "../../i18n";
 import type {
   StemName,
   StemStatus,
@@ -19,6 +20,7 @@ export function StemMixer({
   historyId: string;
   vocalPresence: VocalPresence;
 }) {
+  const { t } = useI18n();
   const player = usePlayer();
   const [status, setStatus] = useState<StemStatus | null>(null);
   const [generating, setGenerating] = useState(false);
@@ -107,21 +109,21 @@ export function StemMixer({
   };
 
   if (!status && !error) {
-    return <div className="stem-mixer-status" role="status">正在检查分轨缓存…</div>;
+    return <div className="stem-mixer-status" role="status">{t("正在检查分轨缓存…")}</div>;
   }
   if (status?.status === "unavailable") {
     return (
       <section className="stem-mixer compact">
-        <strong>分轨独听暂不可用</strong>
-        <span>{status.detail || "服务端没有可用的分轨后端。"}</span>
+        <strong>{t("分轨独听暂不可用")}</strong>
+        <span>{t(status.detail || "服务端没有可用的分轨后端。")}</span>
       </section>
     );
   }
   if (status?.status === "processing") {
     return (
       <section className="stem-mixer compact" role="status">
-        <strong>正在生成四个分轨</strong>
-        <span>首次运行可能需要下载模型；完成后会自动刷新。</span>
+        <strong>{t("正在生成四个分轨")}</strong>
+        <span>{t("首次运行可能需要下载模型；完成后会自动刷新。")}</span>
       </section>
     );
   }
@@ -129,8 +131,8 @@ export function StemMixer({
     return (
       <section className="stem-mixer compact">
         <div>
-          <strong>分轨独听 / 静音</strong>
-          <span>生成可单独控制的人声、鼓、低音和其他乐器轨。</span>
+          <strong>{t("分轨独听 / 静音")}</strong>
+          <span>{t("生成可单独控制的人声、鼓、低音和其他乐器轨。")}</span>
         </div>
         <button
           type="button"
@@ -138,9 +140,9 @@ export function StemMixer({
           disabled={generating}
           onClick={() => void generate()}
         >
-          {generating ? "正在分离，可能需要数分钟…" : "生成四轨"}
+          {generating ? t("正在分离，可能需要数分钟…") : t("生成四轨")}
         </button>
-        {error && <p role="alert">{error}</p>}
+        {error && <p role="alert">{t(error)}</p>}
       </section>
     );
   }
@@ -149,8 +151,8 @@ export function StemMixer({
     <section className={`stem-mixer ${mixEnabled ? "active" : ""}`}>
       <header>
         <div>
-          <strong>分轨独听 / 静音</strong>
-          <span>{status.model} · 主播放器继续控制时间与 A/B 循环</span>
+          <strong>{t("分轨独听 / 静音")}</strong>
+          <span>{status.model} · {t("主播放器继续控制时间与 A/B 循环")}</span>
         </div>
         <button
           type="button"
@@ -159,18 +161,17 @@ export function StemMixer({
           onClick={() => setEnabled(!mixEnabled)}
         >
           {mixEnabled
-            ? "还原原曲"
+            ? t("还原原曲")
             : allLoaded
-              ? "启用分轨混音"
-              : "正在载入四轨…"}
+              ? t("启用分轨混音")
+              : t("正在载入四轨…")}
         </button>
       </header>
       {vocalPresence.status === "instrumental" && (
         <div className="instrumental-stem-note">
-          <strong>纯器乐提示</strong>
+          <strong>{t("纯器乐提示")}</strong>
           <span>
-            古典音乐通常主要落在“其他乐器”和“低音”；“人声”轨若有声音，
-            更可能是串音或分离伪影，不代表作品包含歌唱。
+            {t("古典音乐通常主要落在“其他乐器”和“低音”；“人声”轨若有声音，更可能是串音或分离伪影，不代表作品包含歌唱。")}
           </span>
         </div>
       )}
@@ -181,7 +182,7 @@ export function StemMixer({
           return (
             <article key={track.name}>
               <div>
-                <strong>{track.label}</strong>
+                <strong>{t(track.label)}</strong>
                 <small>{track.name}</small>
               </div>
               <button
@@ -190,7 +191,7 @@ export function StemMixer({
                 aria-pressed={isSolo}
                 onClick={() => setSolo(isSolo ? null : track.name)}
               >
-                独听
+                {t("独听")}
               </button>
               <button
                 type="button"
@@ -198,7 +199,7 @@ export function StemMixer({
                 aria-pressed={isMuted}
                 onClick={() => setMuted((current) => toggled(current, track.name))}
               >
-                静音
+                {t("静音")}
               </button>
             </article>
           );
@@ -215,14 +216,14 @@ export function StemMixer({
             onFailed={() => {
               setFailed((current) => added(current, track.name));
               setEnabled(false);
-              setError(`${track.label}分轨无法载入。`);
+              setError(t("{{track}}分轨无法载入。", { track: t(track.label) }));
             }}
           />
         ))}
       </div>
-      {error && <p role="alert">{error}</p>}
+      {error && <p role="alert">{t(error)}</p>}
       <small className="stem-disclaimer">
-        分轨是模型估计结果，复杂混音中可能出现串音或少量伪影。
+        {t("分轨是模型估计结果，复杂混音中可能出现串音或少量伪影。")}
       </small>
     </section>
   );

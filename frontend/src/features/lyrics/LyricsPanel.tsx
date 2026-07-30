@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import { confidenceClass, percent, seconds } from "../../format";
 import { LatestRequest } from "../../hooks/latestRequest";
+import { useI18n } from "../../i18n";
 import type {
   AnalysisResult,
   Evidence,
@@ -43,6 +44,7 @@ export function LyricsPanel({
   duration: number;
   onSaveLyrics: (lyrics: LyricsSegment[]) => Promise<void>;
 }) {
+  const { t } = useI18n();
   const player = usePlayer();
   const { currentTime } = usePlayerSnapshot();
   const [editingLyrics, setEditingLyrics] = useState(false);
@@ -180,20 +182,20 @@ export function LyricsPanel({
   return (
     <section className="panel lyrics-panel">
       <header>
-        <div><span className="section-number">歌词</span><h3>同步歌词</h3></div>
+        <div><span className="section-number">{t("歌词")}</span><h3>{t("同步歌词")}</h3></div>
         <div className="lyrics-tools">
           {revisionCount > 0 && (
             <select
-              aria-label="歌词修订版本"
+              aria-label={t("歌词修订版本")}
               value={selectedRevision}
               disabled={editingLyrics}
               onFocus={() => void loadRevisions()}
               onChange={(event) => setSelectedRevision(event.target.value)}
             >
-              <option value="current">当前版本</option>
+              <option value="current">{t("当前版本")}</option>
               {revisions.map((revision, index) => (
                 <option key={revision.id} value={String(revision.id)}>
-                  修订前 {revisions.length - index}
+                  {t("修订前")} {revisions.length - index}
                 </option>
               ))}
             </select>
@@ -209,7 +211,7 @@ export function LyricsPanel({
                     setLyricError("");
                   }}
                 >
-                  取消
+                  {t("取消")}
                 </button>
                 <button
                   type="button"
@@ -217,7 +219,7 @@ export function LyricsPanel({
                   disabled={savingLyrics}
                   onClick={() => void saveLyrics()}
                 >
-                  {savingLyrics ? "保存中…" : "保存修订"}
+                  {savingLyrics ? t("保存中…") : t("保存修订")}
                 </button>
               </>
             ) : (
@@ -228,28 +230,27 @@ export function LyricsPanel({
                   setEditingLyrics(true);
                 }}
               >
-                校对歌词
+                {t("校对歌词")}
               </button>
             )
           )}
-          <small>{displayedLyrics.length} 个片段</small>
+          <small>{displayedLyrics.length} {t("个片段")}</small>
         </div>
       </header>
 
       {result.vocal_presence?.status === "instrumental" && (
         <div className="instrumental-mode-note">
-          <strong>纯器乐模式</strong>
+          <strong>{t("纯器乐模式")}</strong>
           <p>
             {result.vocal_presence.reason}
-            导赏将优先关注主题材料、声部、织体、和声、力度与音色。
-            如果判断有误，仍可在这里人工添加歌词进行纠正。
+            {t("导赏将优先关注主题材料、声部、织体、和声、力度与音色。如果判断有误，仍可在这里人工添加歌词进行纠正。")}
           </p>
         </div>
       )}
 
       {qualityEvents.length > 0 && selectedRevision === "current" && (
         <div className="lyrics-quality">
-          <strong>自动质量检查处理了 {qualityEvents.length} 个分块</strong>
+          <strong>{t("自动质量检查处理了")} {qualityEvents.length} {t("个分块")}</strong>
           {qualityEvents.map((event: Evidence) => {
             const issues = Array.isArray(event.metadata.issues)
               ? event.metadata.issues.map(String)
@@ -272,18 +273,18 @@ export function LyricsPanel({
                 {(original.length > 0 || recovered.length > 0) && (
                   <div className="quality-compare">
                     <div>
-                      <small>初次结果</small>
+                      <small>{t("初次结果")}</small>
                       {original.map((line, index) => (
                         <p key={`${line.text}-${index}`}>{line.text}</p>
                       ))}
                     </div>
                     <div>
-                      <small>重听结果</small>
+                      <small>{t("重听结果")}</small>
                       {recovered.length
                         ? recovered.map((line, index) => (
                           <p key={`${line.text}-${index}`}>{line.text}</p>
                         ))
-                        : <p>未获得可靠替代结果</p>}
+                        : <p>{t("未获得可靠替代结果")}</p>}
                     </div>
                   </div>
                 )}
@@ -299,8 +300,8 @@ export function LyricsPanel({
                     )}
                   >
                     {retryingChunk === event.id
-                      ? "模型正在重新聆听…"
-                      : "重新聆听此分块"}
+                      ? t("模型正在重新聆听…")
+                      : t("重新聆听此分块")}
                   </button>
                 )}
               </details>
@@ -309,11 +310,11 @@ export function LyricsPanel({
         </div>
       )}
 
-      {lyricError && <p className="lyrics-error">{lyricError}</p>}
+      {lyricError && <p className="lyrics-error">{t(lyricError)}</p>}
       {retryPreview && (
         <div className="retry-preview">
           <div>
-            <strong>重听预览</strong>
+            <strong>{t("重听预览")}</strong>
             <small>
               {seconds(retryPreview.result.start_s)}–
               {seconds(retryPreview.result.end_s)} · {retryPreview.result.source}
@@ -329,14 +330,14 @@ export function LyricsPanel({
               ))}
             </ul>
           ) : (
-            <p>本次重听没有确认到可靠歌词，不会覆盖当前结果。</p>
+            <p>{t("本次重听没有确认到可靠歌词，不会覆盖当前结果。")}</p>
           )}
           {retryPreview.result.issues.map((issue) => (
             <p className="retry-issue" key={issue}>{issue}</p>
           ))}
           <div className="retry-actions">
             <button type="button" onClick={() => setRetryPreview(null)}>
-              放弃
+              {t("放弃")}
             </button>
             <button
               type="button"
@@ -344,7 +345,7 @@ export function LyricsPanel({
               disabled={!retryPreview.result.lyrics.length || savingLyrics}
               onClick={() => void applyRetry()}
             >
-              {savingLyrics ? "保存中…" : "应用并保存为新版本"}
+              {savingLyrics ? t("保存中…") : t("应用并保存为新版本")}
             </button>
           </div>
         </div>
@@ -355,7 +356,7 @@ export function LyricsPanel({
           {draftLyrics.map((line, index) => (
             <div className="lyrics-editor-row" key={index}>
               <input
-                aria-label={`第 ${index + 1} 行开始时间`}
+                aria-label={`${t("第")} ${index + 1} ${t("行开始时间")}`}
                 type="number"
                 min="0"
                 step="0.01"
@@ -364,7 +365,7 @@ export function LyricsPanel({
                   updateDraft(index, "start_s", event.target.value)}
               />
               <input
-                aria-label={`第 ${index + 1} 行结束时间`}
+                aria-label={`${t("第")} ${index + 1} ${t("行结束时间")}`}
                 type="number"
                 min="0"
                 step="0.01"
@@ -373,14 +374,14 @@ export function LyricsPanel({
                   updateDraft(index, "end_s", event.target.value)}
               />
               <input
-                aria-label={`第 ${index + 1} 行歌词`}
+                aria-label={`${t("第")} ${index + 1} ${t("行歌词")}`}
                 value={line.text}
                 onChange={(event) =>
                   updateDraft(index, "text", event.target.value)}
               />
               <button
                 type="button"
-                aria-label={`删除第 ${index + 1} 行`}
+                aria-label={`${t("删除第")} ${index + 1}`}
                 onClick={() => setDraftLyrics((items) =>
                   items.filter((_, itemIndex) => itemIndex !== index)
                 )}
@@ -405,7 +406,7 @@ export function LyricsPanel({
               },
             ])}
           >
-            ＋ 添加歌词行
+            ＋ {t("添加歌词行")}
           </button>
         </div>
       ) : displayedLyrics.length ? (
@@ -435,7 +436,7 @@ export function LyricsPanel({
                   <p>
                     {line.text}
                     {checked && (
-                      <small className="quality-badge">已重听</small>
+                      <small className="quality-badge">{t("已重听")}</small>
                     )}
                   </p>
                   <Confidence value={line.confidence} />
@@ -446,19 +447,19 @@ export function LyricsPanel({
                   <button
                     type="button"
                     className="line-retry"
-                    title={`${seconds(chunkStart)}–${seconds(chunkEnd)} 重新聆听`}
+                    title={`${seconds(chunkStart)}–${seconds(chunkEnd)} ${t("重新聆听")}`}
                     disabled={Boolean(retryingChunk) || savingLyrics}
                     onClick={() =>
                       void retryChunk(retryKey, chunkStart, chunkEnd)}
                   >
-                    {retryingChunk === retryKey ? "…" : "重听"}
+                    {retryingChunk === retryKey ? "…" : t("重听")}
                   </button>
                 )}
               </div>
             );
           })}
         </div>
-      ) : <p className="empty-copy">没有确认到可靠歌词</p>}
+      ) : <p className="empty-copy">{t("没有确认到可靠歌词")}</p>}
     </section>
   );
 }

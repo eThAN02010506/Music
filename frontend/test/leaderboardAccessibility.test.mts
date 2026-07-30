@@ -17,17 +17,17 @@ const workspaceSource = readFileSync(
 test("leaderboard loading and failure states are announced", () => {
   assert.match(
     source,
-    /className="leaderboard-state" role="status">正在汇总最高成绩…/,
+    /className="leaderboard-state" role="status">\{t\("正在汇总最高成绩…"\)\}/,
   );
   assert.match(
     source,
-    /className="leaderboard-state error" role="alert">\{error\}/,
+    /className="leaderboard-state error" role="alert">\{t\(error\)\}/,
   );
   assert.match(source, /checked=\{user\.leaderboard_visible\}/);
   assert.match(source, /默认不公开/);
 });
 
 test("compact topbar actions retain accessible names", () => {
-  assert.match(workspaceSource, /aria-label="打开我的演唱记录"/);
-  assert.match(workspaceSource, /aria-label="打开演唱排行榜"/);
+  assert.match(workspaceSource, /aria-label=\{t\("打开我的演唱记录"\)\}/);
+  assert.match(workspaceSource, /aria-label=\{t\("打开演唱排行榜"\)\}/);
 });

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { api, isAbortError } from "../../api";
 import { AbortableLatestRequest } from "../../hooks/abortableLatestRequest";
+import { useI18n } from "../../i18n";
 import { MODEL_PROFILES, profileForEndpoint } from "../../modelProfiles";
 import type { JobSnapshot, ModelProbeResult } from "../../types";
 
@@ -43,6 +44,7 @@ export function UploadPanel({
   onLanguage: (language: string) => void;
   onAnalyze: () => void;
 }) {
+  const { t } = useI18n();
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -58,28 +60,27 @@ export function UploadPanel({
     <section className="upload-card panel">
       <div className="upload-intro">
         <div>
-          <div className="section-kicker">NEW LISTENING SESSION</div>
-          <h1>先听懂整首歌，<br />再追问每个瞬间。</h1>
+          <div className="section-kicker">{t("NEW LISTENING SESSION")}</div>
+          <h1>{t("先听懂整首歌，")}<br />{t("再追问每个瞬间。")}</h1>
           <p className="lead">
-            上传歌曲后，从歌词、段落与声音证据出发，生成可以边听边问、
-            随时跳转复听的音乐导赏。
+            {t("上传歌曲后，从歌词、段落与声音证据出发，生成可以边听边问、随时跳转复听的音乐导赏。")}
           </p>
         </div>
-        <div className="upload-capabilities" aria-label="分析流程">
-          <span><i>01</i><strong>理解全曲</strong><small>气氛、结构与情绪弧线</small></span>
-          <span><i>02</i><strong>定位证据</strong><small>歌词、乐器与声音变化</small></span>
-          <span><i>03</i><strong>带着问题复听</strong><small>时间地图与持续对话</small></span>
+        <div className="upload-capabilities" aria-label={t("分析流程")}>
+          <span><i>01</i><strong>{t("理解全曲")}</strong><small>{t("气氛、结构与情绪弧线")}</small></span>
+          <span><i>02</i><strong>{t("定位证据")}</strong><small>{t("歌词、乐器与声音变化")}</small></span>
+          <span><i>03</i><strong>{t("带着问题复听")}</strong><small>{t("时间地图与持续对话")}</small></span>
         </div>
       </div>
 
-      <div className="audio-source-tabs" role="group" aria-label="音频来源">
+      <div className="audio-source-tabs" role="group" aria-label={t("音频来源")}>
         <button
           type="button"
           className={inputSource === "file" ? "active" : ""}
           disabled={busy}
           onClick={() => onInputSource("file")}
         >
-          本地文件
+          {t("本地文件")}
         </button>
         <button
           type="button"
@@ -87,7 +88,7 @@ export function UploadPanel({
           disabled={busy}
           onClick={() => onInputSource("url")}
         >
-          直接音频链接
+          {t("直接音频链接")}
         </button>
       </div>
       {inputSource === "file" ? (
@@ -124,18 +125,18 @@ export function UploadPanel({
           {file ? (
             <>
               <strong>{file.name}</strong>
-              <span>{(file.size / 1024 / 1024).toFixed(1)} MB · 点击更换</span>
+              <span>{(file.size / 1024 / 1024).toFixed(1)} MB · {t("点击更换")}</span>
             </>
           ) : (
             <>
-              <strong>拖放音频到这里</strong>
-              <span>或点击选择 WAV、MP3、FLAC、M4A、OGG</span>
+              <strong>{t("拖放音频到这里")}</strong>
+              <span>{t("或点击选择 WAV、MP3、FLAC、M4A、OGG")}</span>
             </>
           )}
         </div>
       ) : (
         <label className="remote-audio-field">
-          <span>公开的直接音频 URL</span>
+          <span>{t("公开的直接音频 URL")}</span>
           <input
             type="url"
             inputMode="url"
@@ -145,18 +146,17 @@ export function UploadPanel({
             onChange={(event) => onRemoteUrl(event.target.value)}
           />
           <small>
-            仅支持直接返回音频的公网 HTTP(S) 链接。不会抓取 YouTube 等网页，
-            也不会绕过登录、版权、付费或 DRM 限制。
+            {t("仅支持直接返回音频的公网 HTTP(S) 链接。不会抓取 YouTube 等网页，也不会绕过登录、版权、付费或 DRM 限制。")}
           </small>
         </label>
       )}
 
       <div className="upload-actions">
         <label>
-          <span>歌词语言</span>
+          <span>{t("歌词语言")}</span>
           <select value={language} onChange={(event) => onLanguage(event.target.value)} disabled={busy}>
-            <option value="auto">自动识别</option>
-            <option value="zh">中文</option>
+            <option value="auto">{t("自动识别")}</option>
+            <option value="zh">{t("中文")}</option>
             <option value="en">English</option>
           </select>
         </label>
@@ -168,7 +168,7 @@ export function UploadPanel({
           }
           onClick={onAnalyze}
         >
-          {busy ? "分析进行中" : "开始分析"}
+          {busy ? t("分析进行中") : t("开始分析")}
           <span>→</span>
         </button>
       </div>
@@ -199,6 +199,7 @@ export function ModelSettings({
   onModelEndpoint: (endpoint: string) => void;
   onLocalModelPath: (path: string) => void;
 }) {
+  const { t } = useI18n();
   const activeLocation = modelSource === "network"
     ? (modelEndpoint || defaultEndpoint)
     : (localModelPath || localModelRoot);
@@ -248,7 +249,7 @@ export function ModelSettings({
           audio_supported: null,
           openai_audio_supported: null,
           service: "OpenAI-compatible",
-          detail: cause instanceof Error ? cause.message : "模型连接测试失败",
+          detail: cause instanceof Error ? cause.message : t("模型连接测试失败"),
         });
       }
     } finally {
@@ -260,23 +261,23 @@ export function ModelSettings({
   };
   return (
     <details className="topbar-model-settings">
-      <summary aria-label="模型设置">
+      <summary aria-label={t("模型设置")}>
         <span className="settings-icon" aria-hidden="true">⌘</span>
-        <span><strong>模型</strong><small>{modelSource === "local" ? "本地权重" : activeLocation.replace(/^https?:\/\//, "")}</small></span>
+        <span><strong>{t("模型")}</strong><small>{modelSource === "local" ? t("本地权重") : activeLocation.replace(/^https?:\/\//, "")}</small></span>
         <span className="settings-chevron" aria-hidden="true">⌄</span>
       </summary>
       <div className="model-popover">
         <header>
-          <div><strong>模型设置</strong><small>影响后续新分析</small></div>
+          <div><strong>{t("模型设置")}</strong><small>{t("影响后续新分析")}</small></div>
           <span className={`runner-dot ${modelSource === "network" || localRunnerAvailable ? "ready" : "missing"}`} />
         </header>
-        <div className="model-source-tabs" role="group" aria-label="模型来源">
-          <button disabled={busy} className={modelSource === "network" ? "active" : ""} onClick={() => changeModelSource("network")} type="button">模型接口</button>
-          <button disabled={busy} className={modelSource === "local" ? "active" : ""} onClick={() => changeModelSource("local")} type="button">本地权重</button>
+        <div className="model-source-tabs" role="group" aria-label={t("模型来源")}>
+          <button disabled={busy} className={modelSource === "network" ? "active" : ""} onClick={() => changeModelSource("network")} type="button">{t("模型接口")}</button>
+          <button disabled={busy} className={modelSource === "local" ? "active" : ""} onClick={() => changeModelSource("local")} type="button">{t("本地权重")}</button>
         </div>
         {modelSource === "network" ? (
           <>
-            <div className="model-presets" role="group" aria-label="模型预设">
+            <div className="model-presets" role="group" aria-label={t("模型预设")}>
               {MODEL_PROFILES.filter((profile) => profile.id !== "custom").map((profile) => (
                 <button
                   key={profile.id}
@@ -289,18 +290,18 @@ export function ModelSettings({
                       : profile.endpoint,
                   )}
                 >
-                  <strong>{profile.name}</strong>
-                  <small>{profile.note}</small>
+                  <strong>{t(profile.name)}</strong>
+                  <small>{t(profile.note)}</small>
                 </button>
               ))}
             </div>
             <label className="model-field">
-              <span>模型服务地址</span>
+              <span>{t("模型服务地址")}</span>
               <input value={modelEndpoint} onChange={(event) => changeModelEndpoint(event.target.value)} placeholder={defaultEndpoint} disabled={busy} />
               <small>
                 {activeProfile.id === "minicpm-8005"
-                  ? "8005 使用 Comni WebSocket；服务会自动选择专用音频协议。"
-                  : "留空使用后端默认地址；其他地址会自动探测 OpenAI 或专用 Gateway 协议。"}
+                  ? t("8005 使用 Comni WebSocket；服务会自动选择专用音频协议。")
+                  : t("留空使用后端默认地址；其他地址会自动探测 OpenAI 或专用 Gateway 协议。")}
               </small>
             </label>
             <button
@@ -309,7 +310,7 @@ export function ModelSettings({
               disabled={busy || probing}
               onClick={testModel}
             >
-              {probing ? "正在测试…" : "测试模型连接"}
+              {probing ? t("正在测试…") : t("测试模型连接")}
             </button>
             {probe && (
               <div className={`model-probe-result ${
@@ -319,8 +320,8 @@ export function ModelSettings({
                     ? "warning"
                     : "ready"
               }`}>
-                <strong>{probe.online ? probe.service : "连接失败"}</strong>
-                <span>{probe.detail}</span>
+                <strong>{probe.online ? probe.service : t("连接失败")}</strong>
+                <span>{t(probe.detail)}</span>
                 {(probe.model || probe.protocol) && (
                   <small>{[probe.protocol, probe.model].filter(Boolean).join(" · ")}</small>
                 )}
@@ -329,27 +330,28 @@ export function ModelSettings({
           </>
         ) : (
           <label className="model-field">
-            <span>本地模型目录或主 GGUF 路径</span>
+            <span>{t("本地模型目录或主 GGUF 路径")}</span>
             <input value={localModelPath} onChange={(event) => onLocalModelPath(event.target.value)} placeholder={localModelRoot || "src/model"} disabled={busy} />
             <small>
-              允许目录：{localModelRoot || "src/model"}，自动配对 mmproj。
-              {!localRunnerAvailable && " 当前未检测到 llama-server。"}
+              {t("允许目录：")}{localModelRoot || "src/model"} · {t("自动配对 mmproj。")}
+              {!localRunnerAvailable && ` ${t("当前未检测到 llama-server。")}`}
             </small>
           </label>
         )}
-        {busy && <p className="model-locked">分析进行中，模型设置暂时锁定</p>}
+        {busy && <p className="model-locked">{t("分析进行中，模型设置暂时锁定")}</p>}
       </div>
     </details>
   );
 }
 
 export function ProgressPanel({ job, onCancel }: { job: JobSnapshot; onCancel: () => void }) {
+  const { t } = useI18n();
   const running = job.state === "queued" || job.state === "running";
   const progressPercent = Math.max(
     0,
     Math.min(100, Math.round(job.progress * 100)),
   );
-  const stageLabel = stageLabels[job.stage] || job.stage;
+  const stageLabel = t(stageLabels[job.stage] || job.stage);
   return (
     <section className="progress-card panel" aria-busy={running}>
       <div className="progress-heading" aria-live="polite" aria-atomic="true">
@@ -362,7 +364,7 @@ export function ProgressPanel({ job, onCancel }: { job: JobSnapshot; onCancel: (
       <div
         className="progress-track"
         role="progressbar"
-        aria-label="音乐分析进度"
+        aria-label={t("音乐分析进度")}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={progressPercent}
@@ -371,12 +373,12 @@ export function ProgressPanel({ job, onCancel }: { job: JobSnapshot; onCancel: (
         <span style={{ width: `${progressPercent}%` }} />
       </div>
       <div className="progress-meta">
-        <p>{job.error || job.message}</p>
-        {running && <button onClick={onCancel}>取消任务</button>}
+        <p>{t(job.error || job.message)}</p>
+        {running && <button onClick={onCancel}>{t("取消任务")}</button>}
       </div>
       <div className="stage-row">
         {["音频预处理", "声学计算", "模型聆听", "证据融合"].map((item, index) => (
-          <span key={item} className={job.progress >= [0.08, 0.18, 0.36, 0.94][index] ? "active" : ""}>{item}</span>
+          <span key={item} className={job.progress >= [0.08, 0.18, 0.36, 0.94][index] ? "active" : ""}>{t(item)}</span>
         ))}
       </div>
     </section>

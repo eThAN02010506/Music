@@ -2,6 +2,7 @@ import { useMemo } from "react";
 
 import { SignalMark } from "../../components/SignalMark";
 import { percent } from "../../format";
+import { useI18n } from "../../i18n";
 import type {
   AnalysisResult,
   LyricsSegment,
@@ -43,21 +44,22 @@ export function ResultPanel({
   revisionCount: number;
   onSaveLyrics: (lyrics: LyricsSegment[]) => Promise<void>;
 }) {
+  const { t } = useI18n();
   const durationFallback = useMemo(() => analysisDuration(result), [result]);
   const title = result.title || fileName.replace(/\.[^.]+$/, "");
   const teaching = useTeachingExperience(historyId);
   const vocalPresence: VocalPresence = result.vocal_presence ?? {
     status: "unknown",
     confidence: null,
-    reason: "这份旧分析没有保存人声状态，需要重新分析后确认。",
+    reason: t("这份旧分析没有保存人声状态，需要重新分析后确认。"),
     evidence_ids: [],
   };
   const instrumental = vocalPresence.status === "instrumental";
   const modeLabel = instrumental
-    ? "纯器乐"
+    ? t("纯器乐")
     : vocalPresence.status === "vocals"
-      ? "有人声"
-      : "未确认";
+      ? t("有人声")
+      : t("未确认");
 
   return (
     <PlayerProvider durationFallback={durationFallback}>
@@ -65,7 +67,7 @@ export function ResultPanel({
         <section className="result-hero panel">
           <div className="record-art"><SignalMark /></div>
           <div className="track-info">
-            <div className="section-kicker">GUIDED LISTENING READY</div>
+            <div className="section-kicker">{t("GUIDED LISTENING READY")}</div>
             <h2>{title}</h2>
             <p>{result.summary}</p>
             <InsightPlayer
@@ -81,10 +83,10 @@ export function ResultPanel({
               <span>BPM</span>
               <strong>{result.technical_metrics.bpm?.toFixed(1) || "—"}</strong>
               <small>
-                可信度 {percent(result.technical_metrics.bpm_confidence)}
+                {t("可信度")} {percent(result.technical_metrics.bpm_confidence)}
                 {result.technical_metrics.bpm_ambiguous
                   && result.technical_metrics.bpm_candidates.length > 1
-                  ? ` · 候选 ${result.technical_metrics.bpm_candidates
+                  ? ` · ${t("候选")} ${result.technical_metrics.bpm_candidates
                     .slice(1).join(" / ")}`
                   : ""}
               </small>
@@ -93,15 +95,15 @@ export function ResultPanel({
               <span>KEY</span>
               <strong>{result.technical_metrics.key || "—"}</strong>
               <small>
-                可信度 {percent(result.technical_metrics.key_confidence)}
+                {t("可信度")} {percent(result.technical_metrics.key_confidence)}
               </small>
             </div>
             <div>
               <span>MODE</span>
               <strong>{modeLabel}</strong>
               <small>
-                可信度 {percent(vocalPresence.confidence)}
-                {result.lyrics.length > 0 ? ` · ${result.lyrics.length} 段歌词` : ""}
+                {t("可信度")} {percent(vocalPresence.confidence)}
+                {result.lyrics.length > 0 ? ` · ${result.lyrics.length} ${t("段歌词")}` : ""}
               </small>
             </div>
           </div>
@@ -109,7 +111,7 @@ export function ResultPanel({
 
         {result.warnings.length > 0 && (
           <section className="warning-box">
-            <strong>分析提醒</strong>
+            <strong>{t("分析提醒")}</strong>
             {result.warnings.map((warning) => <p key={warning}>{warning}</p>)}
           </section>
         )}

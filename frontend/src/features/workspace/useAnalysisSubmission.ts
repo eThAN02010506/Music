@@ -7,6 +7,7 @@ import {
 } from "react";
 import { api } from "../../api";
 import { LatestRequest } from "../../hooks/latestRequest";
+import { useI18n } from "../../i18n";
 import type { RuntimeConfig } from "../../types";
 import type { WorkspaceAction } from "./workspaceState";
 
@@ -67,6 +68,7 @@ export function useAnalysisSubmission({
   viewRequests,
   refreshHistory,
 }: AnalysisSubmissionOptions) {
+  const { t } = useI18n();
   const [creatingJob, setCreatingJob] = useState(false);
   const creatingJobRef = useRef(false);
   const mountedRef = useRef(true);
@@ -91,7 +93,7 @@ export function useAnalysisSubmission({
     if (inputSource === "url") {
       dispatch({
         type: "remote-chosen",
-        fileName: remoteFileName(remote),
+        fileName: remoteFileName(remote, t("远程音频")),
       });
     }
     dispatch({ type: "analysis-started" });
@@ -147,19 +149,20 @@ export function useAnalysisSubmission({
     modelEndpoint,
     modelSource,
     refreshHistory,
+    t,
     viewRequests,
   ]);
 
   return { analyze, creatingJob };
 }
 
-function remoteFileName(value: string): string {
+function remoteFileName(value: string, fallback: string): string {
   try {
     const name = decodeURIComponent(
       new URL(value).pathname.split("/").filter(Boolean).pop() || "",
     );
-    return name || "远程音频";
+    return name || fallback;
   } catch {
-    return "远程音频";
+    return fallback;
   }
 }

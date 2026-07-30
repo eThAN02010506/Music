@@ -10,9 +10,11 @@ import { AuthScreen } from "./features/auth/AuthScreen";
 import { AuthenticatedWorkspace } from "./features/workspace/AuthenticatedWorkspace";
 import { LatestRequest } from "./hooks/latestRequest";
 import { useHealthCheck } from "./hooks/useHealthCheck";
+import { useI18n } from "./i18n";
 import type { User } from "./types";
 
 export default function App() {
+  const { t } = useI18n();
   const {
     health,
     healthChecked,
@@ -87,10 +89,10 @@ export default function App() {
 
   if (authLoading) {
     return (
-      <main className="app-loading" aria-label="正在打开本地工作区">
+      <main className="app-loading" aria-label={t("正在打开本地工作区")}>
         <SignalMark />
         <strong>Music Insight</strong>
-        <span>正在打开本地工作区…</span>
+        <span>{t("正在打开本地工作区…")}</span>
       </main>
     );
   }

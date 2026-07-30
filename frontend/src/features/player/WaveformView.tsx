@@ -6,6 +6,7 @@ import RegionsPlugin, {
 } from "wavesurfer.js/dist/plugins/regions.esm.js";
 
 import type { HistoryWaveform, Span } from "../../types";
+import { useI18n } from "../../i18n";
 import { usePlayer, usePlayerSnapshot } from "./PlayerContext";
 
 const USER_REGION_ID = "user-selection";
@@ -30,6 +31,7 @@ export function WaveformView({
   waveform: HistoryWaveform;
   sections?: Array<Span & { id: string; label: string }>;
 }) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const player = usePlayer();
   const { selectedRange } = usePlayerSnapshot();
@@ -152,9 +154,9 @@ export function WaveformView({
         ref={containerRef}
         className="waveform-canvas"
         role="img"
-        aria-label="歌曲波形；拖动可选择最多 30 秒"
+        aria-label={t("歌曲波形；拖动可选择最多 30 秒")}
       />
-      <small>拖动波形框选，点击段落或回答中的时间可跳转</small>
+      <small>{t("拖动波形框选，点击段落或回答中的时间可跳转")}</small>
     </div>
   );
 }

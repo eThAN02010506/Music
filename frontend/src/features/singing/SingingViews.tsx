@@ -4,6 +4,7 @@ import { ModalDialog } from "../../components/ModalDialog";
 import { percent, seconds } from "../../format";
 import { useAudioRecorder } from "../../hooks/useAudioRecorder";
 import { useObjectUrl } from "../../hooks/useObjectUrl";
+import { useI18n } from "../../i18n";
 import type {
   LeaderboardEntry,
   SingingScore,
@@ -12,10 +13,11 @@ import type {
 import { historyTime } from "../history/HistoryViews";
 
 export function SingingScoreResult({ score }: { score: SingingScore }) {
+  const { t } = useI18n();
   return (
     <div className="score-result">
       <div className="total-score">
-        <strong>{score.total}</strong><span>/ 100</span><small>综合得分</small>
+        <strong>{score.total}</strong><span>/ 100</span><small>{t("综合得分")}</small>
       </div>
       <div className="score-breakdown">
         {[
@@ -25,12 +27,12 @@ export function SingingScoreResult({ score }: { score: SingingScore }) {
           ["稳定性", score.stability],
         ].map(([label, value]) => (
           <div key={label}>
-            <span>{label}</span><strong>{value}</strong>
+            <span>{t(String(label))}</span><strong>{value}</strong>
             <i><b style={{ width: `${value}%` }} /></i>
           </div>
         ))}
       </div>
-      <div className="pitch-error-strip" aria-label="音高误差时间轴">
+      <div className="pitch-error-strip" aria-label={t("音高误差时间轴")}>
         {score.pitch_curve.map((point, index) => {
           const errorValue = point.error_semitones;
           const level = errorValue == null ? "missing"
@@ -38,22 +40,22 @@ export function SingingScoreResult({ score }: { score: SingingScore }) {
             : errorValue <= 1.5 ? "medium" : "bad";
           return <span key={index} className={level} title={
             errorValue == null
-              ? "无可比音高"
-              : `${seconds(point.reference_time_s)} · 偏差 ${errorValue} 半音`
+              ? t("无可比音高")
+              : `${seconds(point.reference_time_s)} · ${t("偏差")} ${errorValue} ${t("半音")}`
           } />;
         })}
       </div>
       <p className="score-summary">
-        音高误差中位数：
-        {score.median_pitch_error == null ? "证据不足" : `${score.median_pitch_error} 半音`}
-        {score.in_tune_ratio != null && ` · 半音内命中 ${percent(score.in_tune_ratio)}`}
+        {t("音高误差中位数：")}
+        {score.median_pitch_error == null ? t("证据不足") : `${score.median_pitch_error} ${t("半音")}`}
+        {score.in_tune_ratio != null && ` · ${t("半音内命中")} ${percent(score.in_tune_ratio)}`}
       </p>
       <p className="score-summary">
-        参考 {seconds(score.reference_duration_s)} · 演唱 {seconds(score.performance_duration_s)}
+        {t("参考")} {seconds(score.reference_duration_s)} · {t("演唱")} {seconds(score.performance_duration_s)}
       </p>
       {score.practice_moments.length > 0 && (
         <div className="singing-practice-moments">
-          <strong>优先练习的时间段</strong>
+          <strong>{t("优先练习的时间段")}</strong>
           {score.practice_moments.map((moment) => (
             <article key={`${moment.start_s}-${moment.end_s}`}>
               <time>
@@ -71,6 +73,7 @@ export function SingingScoreResult({ score }: { score: SingingScore }) {
 }
 
 export function SingingComparison({ historyId }: { historyId: string | null }) {
+  const { t } = useI18n();
   const [attempt, setAttempt] = useState<Blob | null>(null);
   const [attemptName, setAttemptName] = useState("my-singing.webm");
   const {
@@ -127,8 +130,8 @@ export function SingingComparison({ historyId }: { historyId: string | null }) {
   return (
     <section className="panel singing-panel">
       <header>
-        <div><span className="section-number">06</span><h3>演唱对比</h3></div>
-        <small>本地声学评分 · 不由大模型决定总分</small>
+        <div><span className="section-number">06</span><h3>{t("演唱对比")}</h3></div>
+        <small>{t("本地声学评分 · 不由大模型决定总分")}</small>
       </header>
       <div className="singing-actions">
         <button
@@ -142,13 +145,13 @@ export function SingingComparison({ historyId }: { historyId: string | null }) {
           onClick={() => audioRecorder.recording ? stopRecording() : void startRecording()}
         >
           {audioRecorder.starting
-            ? "等待麦克风授权…"
+            ? t("等待麦克风授权…")
             : audioRecorder.finalizing
-              ? "正在生成录音…"
-            : audioRecorder.recording ? "■ 停止录音" : "● 开始演唱"}
+              ? t("正在生成录音…")
+            : audioRecorder.recording ? `■ ${t("停止录音")}` : `● ${t("开始演唱")}`}
         </button>
         <label aria-disabled={scoring || audioRecorder.busy}>
-          上传录音
+          {t("上传录音")}
           <input
             type="file"
             accept="audio/*,.wav,.mp3,.m4a,.webm,.ogg"
@@ -171,17 +174,18 @@ export function SingingComparison({ historyId }: { historyId: string | null }) {
           }
           onClick={() => void runScore()}
         >
-          {scoring ? "正在对齐音高与节奏…" : "开始评分"}
+          {scoring ? t("正在对齐音高与节奏…") : t("开始评分")}
         </button>
       </div>
       {attemptUrl && <audio src={attemptUrl} controls preload="metadata" />}
-      {error && <p className="singing-error">{error}</p>}
+      {error && <p className="singing-error">{t(error)}</p>}
       {score && <SingingScoreResult score={score} />}
     </section>
   );
 }
 
 export function StandaloneSingingComparison() {
+  const { t } = useI18n();
   const [reference, setReference] = useState<File | null>(null);
   const {
     url: referenceUrl,
@@ -256,21 +260,20 @@ export function StandaloneSingingComparison() {
   return (
     <section className="panel standalone-singing">
       <div className="section-kicker">SINGING COMPARE</div>
-      <h1>上传示范，再唱一遍</h1>
+      <h1>{t("上传示范，再唱一遍")}</h1>
       <p className="lead">
-        分别提供参考音频和你的演唱。系统会自动去除首尾静音、统一时间尺度，
-        并比较音准、节奏、完整度与稳定性。
+        {t("分别提供参考音频和你的演唱。系统会自动去除首尾静音、统一时间尺度，并比较音准、节奏、完整度与稳定性。")}
       </p>
       <div className="dual-audio-grid">
         <article className={reference ? "ready" : ""}>
           <span className="audio-step">01</span>
-          <h3>参考音频</h3>
-          <p>原唱、标准示范或纯人声均可。纯人声参考通常最准确。</p>
+          <h3>{t("参考音频")}</h3>
+          <p>{t("原唱、标准示范或纯人声均可。纯人声参考通常最准确。")}</p>
           <label
             className="audio-file-button"
             aria-disabled={scoring || audioRecorder.busy}
           >
-            {reference ? "更换参考音频" : "上传参考音频"}
+            {reference ? t("更换参考音频") : t("上传参考音频")}
             <input
               type="file"
               accept="audio/*,.wav,.mp3,.flac,.m4a,.webm,.ogg"
@@ -287,14 +290,14 @@ export function StandaloneSingingComparison() {
         </article>
         <article className={performance ? "ready" : ""}>
           <span className="audio-step">02</span>
-          <h3>你的演唱</h3>
-          <p>可以上传已有录音，也可以直接使用浏览器麦克风录制。</p>
+          <h3>{t("你的演唱")}</h3>
+          <p>{t("可以上传已有录音，也可以直接使用浏览器麦克风录制。")}</p>
           <div className="performance-buttons">
             <label
               className="audio-file-button"
               aria-disabled={scoring || audioRecorder.busy}
             >
-              {performance ? "更换录音" : "上传录音"}
+              {performance ? t("更换录音") : t("上传录音")}
               <input
                 type="file"
                 accept="audio/*,.wav,.mp3,.flac,.m4a,.webm,.ogg"
@@ -313,10 +316,10 @@ export function StandaloneSingingComparison() {
               onClick={() => audioRecorder.recording ? stopRecording() : void startRecording()}
             >
               {audioRecorder.starting
-                ? "等待麦克风授权…"
+                ? t("等待麦克风授权…")
                 : audioRecorder.finalizing
-                  ? "正在生成录音…"
-                : audioRecorder.recording ? "■ 停止录音" : "● 麦克风录音"}
+                  ? t("正在生成录音…")
+                : audioRecorder.recording ? `■ ${t("停止录音")}` : `● ${t("麦克风录音")}`}
             </button>
           </div>
           {performance && <strong className="audio-file-name">{performanceName}</strong>}
@@ -325,8 +328,8 @@ export function StandaloneSingingComparison() {
       </div>
       <div className="standalone-score-action">
         <div>
-          <strong>两份音频只用于本次计算</strong>
-          <small>评分完成后，后端会立即删除临时文件。</small>
+          <strong>{t("两份音频只用于本次计算")}</strong>
+          <small>{t("评分完成后，后端会立即删除临时文件。")}</small>
         </div>
         <button
           type="button"
@@ -338,10 +341,10 @@ export function StandaloneSingingComparison() {
           }
           onClick={() => void compare()}
         >
-          {scoring ? "正在提取旋律并对齐…" : "开始打分对比"}
+          {scoring ? t("正在提取旋律并对齐…") : t("开始打分对比")}
         </button>
       </div>
-      {error && <p className="singing-error">{error}</p>}
+      {error && <p className="singing-error">{t(error)}</p>}
       {score && <SingingScoreResult score={score} />}
     </section>
   );
@@ -362,6 +365,7 @@ export function LeaderboardPanel({
   onUserUpdated: (user: User) => void;
   onClose: () => void;
 }) {
+  const { locale, t } = useI18n();
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatingVisibility, setUpdatingVisibility] = useState(false);
@@ -414,12 +418,12 @@ export function LeaderboardPanel({
       <header>
         <div>
           <span className="section-kicker">SINGING LEADERBOARD</span>
-          <h2 id="leaderboard-title">演唱最高分榜</h2>
+          <h2 id="leaderboard-title">{t("演唱最高分榜")}</h2>
         </div>
-        <button type="button" className="dialog-close" onClick={onClose} aria-label="关闭排行榜">×</button>
+        <button type="button" className="dialog-close" onClick={onClose} aria-label={t("关闭排行榜")}>×</button>
       </header>
       <p className="leaderboard-rule">
-        娱乐最高分榜，每人仅取最高分；不同参考音频仅供娱乐。
+        {t("娱乐最高分榜，每人仅取最高分；不同参考音频仅供娱乐。")}
       </p>
       <label className="leaderboard-privacy">
         <input
@@ -429,18 +433,18 @@ export function LeaderboardPanel({
           onChange={(event) => void changeVisibility(event.target.checked)}
         />
         <span>
-          <strong>把我的最高分加入排行榜</strong>
-          <small>默认不公开；关闭后会立即从其他用户可见的榜单移除。</small>
+          <strong>{t("把我的最高分加入排行榜")}</strong>
+          <small>{t("默认不公开；关闭后会立即从其他用户可见的榜单移除。")}</small>
         </span>
       </label>
       {loading ? (
-        <div className="leaderboard-state" role="status">正在汇总最高成绩…</div>
+        <div className="leaderboard-state" role="status">{t("正在汇总最高成绩…")}</div>
       ) : error ? (
-        <div className="leaderboard-state error" role="alert">{error}</div>
+        <div className="leaderboard-state error" role="alert">{t(error)}</div>
       ) : entries.length ? (
         <div className="leaderboard-list">
           <div className="leaderboard-labels" aria-hidden="true">
-            <span>名次 / 用户</span><span>四项得分</span><span>最高分</span>
+            <span>{t("名次 / 用户")}</span><span>{t("四项得分")}</span><span>{t("最高分")}</span>
           </div>
           {entries.map((entry) => {
             const own = entry.is_current_user;
@@ -452,19 +456,19 @@ export function LeaderboardPanel({
                 <div className="leaderboard-person">
                   <strong className="leaderboard-rank">{entry.rank}</strong>
                   <span>
-                    <b>{entry.username}{own && <em>你</em>}</b>
-                    <small>{leaderboardSource(entry.source)} · {entry.attempts} 次评分</small>
+                    <b>{entry.username}{own && <em>{t("你")}</em>}</b>
+                    <small>{t(leaderboardSource(entry.source))} · {entry.attempts} {t("次评分")}</small>
                   </span>
                 </div>
                 <div className="leaderboard-breakdown">
-                  <span>音准 <b>{entry.pitch}</b></span>
-                  <span>节奏 <b>{entry.rhythm}</b></span>
-                  <span>完整 <b>{entry.completeness}</b></span>
-                  <span>稳定 <b>{entry.stability}</b></span>
+                  <span>{t("音准")} <b>{entry.pitch}</b></span>
+                  <span>{t("节奏")} <b>{entry.rhythm}</b></span>
+                  <span>{t("完整")} <b>{entry.completeness}</b></span>
+                  <span>{t("稳定")} <b>{entry.stability}</b></span>
                 </div>
                 <div className="leaderboard-total">
                   <strong>{entry.total}</strong><span>/ 100</span>
-                  <small>{historyTime(entry.created_at)}</small>
+                  <small>{historyTime(entry.created_at, locale)}</small>
                 </div>
               </article>
             );
@@ -472,8 +476,8 @@ export function LeaderboardPanel({
         </div>
       ) : (
         <div className="leaderboard-state">
-          <strong>排行榜还没有成绩</strong>
-          <span>完成一次演唱打分后，最高分会出现在这里。</span>
+          <strong>{t("排行榜还没有成绩")}</strong>
+          <span>{t("完成一次演唱打分后，最高分会出现在这里。")}</span>
         </div>
       )}
     </ModalDialog>

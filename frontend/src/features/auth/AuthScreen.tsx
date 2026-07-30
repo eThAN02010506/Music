@@ -8,6 +8,7 @@ import {
 import { announceAuthChange } from "../../authSession";
 import { SignalMark } from "../../components/SignalMark";
 import { tabIndexAfterKey } from "../../hooks/tabKeyboard";
+import { LanguageSwitcher, useI18n } from "../../i18n";
 import type { HealthResult, User } from "../../types";
 
 function readableApiError(cause: unknown, fallback: string) {
@@ -44,6 +45,7 @@ export function AuthScreen({
   onRetryHealth: () => void;
   onAuthenticated: (user: User) => void;
 }) {
+  const { t } = useI18n();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -107,20 +109,22 @@ export function AuthScreen({
 
   return (
     <main className="auth-shell">
+      <div className="auth-language">
+        <LanguageSwitcher />
+      </div>
       <section className="auth-intro">
         <div className="auth-brand"><SignalMark /><span>Music Insight</span></div>
         <div>
           <span className="section-kicker">LOCAL MUSIC WORKSPACE</span>
-          <h1>你的音乐分析，<br />只属于你的账号。</h1>
+          <h1>{t("你的音乐分析，")}<br />{t("只属于你的账号。")}</h1>
           <p>
-            分析记录、音频和演唱成绩按本地用户隔离保存。
-            登录后可以继续已有分析、比较报告，也可以参与演唱最高分榜。
+            {t("分析记录、音频和演唱成绩按本地用户隔离保存。登录后可以继续已有分析、比较报告，也可以参与演唱最高分榜。")}
           </p>
         </div>
-        <div className="auth-points" aria-label="功能概览">
-          <span><i>01</i> 独立历史与音频</span>
-          <span><i>02</i> 演唱评分与排行</span>
-          <span><i>03</i> 本地优先保存</span>
+        <div className="auth-points" aria-label={t("功能概览")}>
+          <span><i>01</i> {t("独立历史与音频")}</span>
+          <span><i>02</i> {t("演唱评分与排行")}</span>
+          <span><i>03</i> {t("本地优先保存")}</span>
         </div>
       </section>
       <section className="auth-card" aria-labelledby="auth-title">
@@ -132,10 +136,10 @@ export function AuthScreen({
               : "offline"} />
           <div>
             <strong>{health
-              ? "分析服务在线"
+              ? t("分析服务在线")
               : healthChecking || !healthChecked
-                ? "正在连接分析服务"
-                : "分析服务未连接"}</strong>
+                ? t("正在连接分析服务")
+                : t("分析服务未连接")}</strong>
             <small>{API_BASE}</small>
           </div>
           {!health && healthChecked && !healthChecking && (
@@ -144,11 +148,11 @@ export function AuthScreen({
               className="auth-health-retry"
               onClick={onRetryHealth}
             >
-              重试连接
+              {t("重试连接")}
             </button>
           )}
         </div>
-        <div className="auth-tabs" role="tablist" aria-label="账号操作">
+        <div className="auth-tabs" role="tablist" aria-label={t("账号操作")}>
           <button
             type="button"
             role="tab"
@@ -160,7 +164,7 @@ export function AuthScreen({
             onClick={() => switchMode("login")}
             onKeyDown={handleTabKeyDown}
           >
-            登录
+            {t("登录")}
           </button>
           <button
             type="button"
@@ -173,7 +177,7 @@ export function AuthScreen({
             onClick={() => switchMode("register")}
             onKeyDown={handleTabKeyDown}
           >
-            创建账号
+            {t("创建账号")}
           </button>
         </div>
         <div
@@ -183,12 +187,12 @@ export function AuthScreen({
         >
           <div className="auth-card-copy">
             <span className="section-kicker">{mode === "login" ? "WELCOME BACK" : "NEW LOCAL USER"}</span>
-            <h2 id="auth-title">{mode === "login" ? "继续你的工作区" : "创建本地工作区"}</h2>
-            <p>{mode === "login" ? "使用本机账号登录。" : "账号只创建在当前这台设备上。"}</p>
+            <h2 id="auth-title">{mode === "login" ? t("继续你的工作区") : t("创建本地工作区")}</h2>
+            <p>{mode === "login" ? t("使用本机账号登录。") : t("账号只创建在当前这台设备上。")}</p>
           </div>
           <form onSubmit={(event) => void submit(event)}>
             <label>
-              <span>用户名</span>
+              <span>{t("用户名")}</span>
               <input
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
@@ -200,7 +204,7 @@ export function AuthScreen({
               />
             </label>
             <label>
-              <span>密码</span>
+              <span>{t("密码")}</span>
               <input
                 type="password"
                 value={password}
@@ -213,7 +217,7 @@ export function AuthScreen({
             </label>
             {mode === "register" && (
               <label>
-                <span>再次输入密码</span>
+                <span>{t("再次输入密码")}</span>
                 <input
                   type="password"
                   value={confirmPassword}
@@ -227,7 +231,7 @@ export function AuthScreen({
             )}
             {(error || notice) && (
               <p className={error ? "auth-error" : "auth-notice"} role="status">
-                {error || notice}
+                {t(error || notice)}
               </p>
             )}
             <button
@@ -235,11 +239,11 @@ export function AuthScreen({
               className="auth-submit"
               disabled={submitting || !health}
             >
-              {submitting ? "请稍候…" : mode === "login" ? "登录工作区" : "创建并进入"}
+              {submitting ? t("请稍候…") : mode === "login" ? t("登录工作区") : t("创建并进入")}
               <span>→</span>
             </button>
           </form>
-          <p className="auth-privacy">密码以带盐单向摘要保存；浏览器不会保存明文密码。</p>
+          <p className="auth-privacy">{t("密码以带盐单向摘要保存；浏览器不会保存明文密码。")}</p>
         </div>
       </section>
     </main>

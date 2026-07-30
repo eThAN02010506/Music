@@ -24,6 +24,7 @@ import {
 } from "../singing/SingingViews";
 import { SingingAttemptsPanel } from "../singing/SingingAttemptsPanel";
 import { LatestRequest } from "../../hooks/latestRequest";
+import { LanguageSwitcher, useI18n } from "../../i18n";
 import { tabIndexAfterKey } from "../../hooks/tabKeyboard";
 import { useObjectUrl } from "../../hooks/useObjectUrl";
 import type {
@@ -57,6 +58,7 @@ export function AuthenticatedWorkspace({
   onUserUpdated: (user: User) => void;
   onLoggedOut: () => void;
 }) {
+  const { t } = useI18n();
   const [workspace, dispatch] = useReducer(
     workspaceReducer,
     initialWorkspaceState,
@@ -203,12 +205,12 @@ export function AuthenticatedWorkspace({
         ? `${API_BASE}/history/${encodeURIComponent(activeId)}/audio`
         : "");
   const workspaceTitle = comparison.length === 2
-    ? "双曲对比"
+    ? t("双曲对比")
     : activeId
-      ? fileName || "分析详情"
+      ? fileName || t("分析详情")
       : startMode === "analysis"
-        ? "新建音乐导赏"
-        : "演唱对比";
+        ? t("新建音乐导赏")
+        : t("演唱对比");
 
   return (
     <div className="app-shell">
@@ -234,8 +236,12 @@ export function AuthenticatedWorkspace({
           <div className="topbar-actions">
             <div className="service-status">
               <span className={health ? "online" : "offline"} />
-              <div><strong>{health ? "分析服务在线" : "后端未连接"}</strong><small>{runtimeConfig?.model_endpoint || API_BASE}</small></div>
+              <div>
+                <strong>{health ? t("分析服务在线") : t("后端未连接")}</strong>
+                <small>{runtimeConfig?.model_endpoint || API_BASE}</small>
+              </div>
             </div>
+            <LanguageSwitcher compact />
             <ModelSettings
               modelSource={modelSource}
               modelEndpoint={modelEndpoint}
@@ -251,20 +257,20 @@ export function AuthenticatedWorkspace({
             <button
               type="button"
               className="attempt-history-trigger"
-              aria-label="打开我的演唱记录"
+              aria-label={t("打开我的演唱记录")}
               onClick={() => setShowSingingAttempts(true)}
             >
               <span aria-hidden="true">♫</span>
-              <span><strong>演唱记录</strong><small>个人评分历史</small></span>
+              <span><strong>{t("演唱记录")}</strong><small>{t("个人评分历史")}</small></span>
             </button>
             <button
               type="button"
               className="leaderboard-trigger"
-              aria-label="打开演唱排行榜"
+              aria-label={t("打开演唱排行榜")}
               onClick={() => setShowLeaderboard(true)}
             >
               <span aria-hidden="true">♜</span>
-              <span><strong>排行榜</strong><small>演唱最高分</small></span>
+              <span><strong>{t("排行榜")}</strong><small>{t("演唱最高分")}</small></span>
             </button>
             <UserMenu
               user={user}
@@ -278,7 +284,7 @@ export function AuthenticatedWorkspace({
         <main id="top">
           {!activeId && comparison.length === 0 && (
             <>
-              <div className="start-mode-tabs" role="tablist" aria-label="开始方式">
+              <div className="start-mode-tabs" role="tablist" aria-label={t("开始方式")}>
                 <button
                   type="button"
                   role="tab"
@@ -290,8 +296,8 @@ export function AuthenticatedWorkspace({
                   onClick={() => setStartMode("analysis")}
                   onKeyDown={handleStartModeKeyDown}
                 >
-                  音乐分析
-                  <small>上传歌曲并生成完整报告</small>
+                  {t("音乐分析")}
+                  <small>{t("上传歌曲并生成完整报告")}</small>
                 </button>
                 <button
                   type="button"
@@ -304,8 +310,8 @@ export function AuthenticatedWorkspace({
                   onClick={() => setStartMode("singing")}
                   onKeyDown={handleStartModeKeyDown}
                 >
-                  独立演唱对比
-                  <small>参考音频与个人录音直接打分</small>
+                  {t("独立演唱对比")}
+                  <small>{t("参考音频与个人录音直接打分")}</small>
                 </button>
               </div>
               <div
@@ -337,8 +343,8 @@ export function AuthenticatedWorkspace({
           {comparison.length === 2 && <ComparisonPanel entries={comparison} />}
           {(error || connectionWarning) && (
             <div className="error-banner">
-              <strong>{error ? "出现问题" : "连接恢复中"}</strong>
-              <span>{error || connectionWarning}</span>
+              <strong>{error ? t("出现问题") : t("连接恢复中")}</strong>
+              <span>{t(error || connectionWarning || "")}</span>
             </div>
           )}
           {job && <ProgressPanel job={job} onCancel={() => void cancel()} />}
@@ -355,7 +361,7 @@ export function AuthenticatedWorkspace({
           )}
         </main>
 
-        <footer><span>Music Insight · 本地优先的音乐证据分析</span><span>FastAPI + React</span></footer>
+        <footer><span>Music Insight · {t("本地优先的音乐证据分析")}</span><span>FastAPI + React</span></footer>
       </div>
       {showSingingAttempts && (
         <SingingAttemptsPanel

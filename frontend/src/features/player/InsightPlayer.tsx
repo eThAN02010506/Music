@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, API_BASE, isAbortError } from "../../api";
 import { seconds } from "../../format";
+import { useI18n } from "../../i18n";
 import type {
   HistoryWaveform,
   SectionMarker,
@@ -26,6 +27,7 @@ export function InsightPlayer({
   vocalPresence: VocalPresence;
   sections?: SectionMarker[];
 }) {
+  const { t } = useI18n();
   const audioRef = useRef<HTMLAudioElement>(null);
   const [media, setMedia] = useState<HTMLAudioElement | null>(null);
   const [waveform, setWaveform] = useState<HistoryWaveform | null>(null);
@@ -83,7 +85,7 @@ export function InsightPlayer({
   return (
     <div className="insight-player">
       <audio
-        aria-label={`${title} 播放器`}
+        aria-label={`${title} ${t("播放器")}`}
         crossOrigin={audioUrl.startsWith(API_BASE) ? "use-credentials" : undefined}
         ref={setAudioElement}
         src={audioUrl}
@@ -105,12 +107,12 @@ export function InsightPlayer({
       )}
       {historyId && !waveform && !waveformError && (
         <div className="waveform-loading" role="status">
-          正在准备可框选波形…
+          {t("正在准备可框选波形…")}
         </div>
       )}
       {waveformError && (
         <p className="waveform-error" role="alert">
-          波形暂不可用，仍可使用下方时间输入选区。
+          {t("波形暂不可用，仍可使用下方时间输入选区。")}
         </p>
       )}
       <div className="player-readout" aria-live="off">
@@ -118,14 +120,14 @@ export function InsightPlayer({
         <span>/ {seconds(snapshot.duration)}</span>
         {snapshot.activePlayback && (
           <button type="button" onClick={() => player.clearPlayback()}>
-            退出
+            {t("退出")}
             {snapshot.activePlayback.mode === "once"
-              ? "选区播放"
+              ? t("选区播放")
               : snapshot.activePlayback.mode === "loop"
-                ? "选区循环"
+                ? t("选区循环")
                 : snapshot.activePlayback.phase === "a"
-                  ? " A→B（正在播放 A）"
-                  : " A→B（正在播放 B）"}
+                  ? ` A→B (${t("正在播放 A")})`
+                  : ` A→B (${t("正在播放 B")})`}
           </button>
         )}
       </div>
@@ -137,10 +139,10 @@ export function InsightPlayer({
             rangeAround(snapshot.currentTime, snapshot.duration),
           )}
         >
-          选取当前 15 秒
+          {t("选取当前 15 秒")}
         </button>
         <label>
-          开始
+          {t("开始")}
           <input
             type="number"
             min="0"
@@ -152,7 +154,7 @@ export function InsightPlayer({
           />
         </label>
         <label>
-          结束
+          {t("结束")}
           <input
             type="number"
             min="0"
@@ -169,25 +171,25 @@ export function InsightPlayer({
               type="button"
               onClick={() => player.playRange(snapshot.selectedRange!)}
             >
-              播放选区
+              {t("播放选区")}
             </button>
             <button
               type="button"
               onClick={() => player.playRange(snapshot.selectedRange!, true)}
             >
-              循环选区
+              {t("循环选区")}
             </button>
             <button
               type="button"
               onClick={() => player.setRange("a", snapshot.selectedRange)}
             >
-              设为 A
+              {t("设为 A")}
             </button>
             <button
               type="button"
               onClick={() => player.setRange("b", snapshot.selectedRange)}
             >
-              设为 B
+              {t("设为 B")}
             </button>
           </>
         )}
@@ -197,21 +199,21 @@ export function InsightPlayer({
           <span>
             A {snapshot.rangeA
               ? `${seconds(snapshot.rangeA.start_s)}–${seconds(snapshot.rangeA.end_s)}`
-              : "未设置"}
+              : t("未设置")}
           </span>
           <span>
             B {snapshot.rangeB
               ? `${seconds(snapshot.rangeB.start_s)}–${seconds(snapshot.rangeB.end_s)}`
-              : "未设置"}
+              : t("未设置")}
           </span>
           {snapshot.rangeA && (
             <button type="button" onClick={() => player.playRange(snapshot.rangeA!)}>
-              播放 A
+              {t("播放 A")}
             </button>
           )}
           {snapshot.rangeB && (
             <button type="button" onClick={() => player.playRange(snapshot.rangeB!)}>
-              播放 B
+              {t("播放 B")}
             </button>
           )}
           {snapshot.rangeA && snapshot.rangeB && (
@@ -219,7 +221,7 @@ export function InsightPlayer({
               type="button"
               onClick={() => player.playAB(snapshot.rangeA!, snapshot.rangeB!)}
             >
-              连续播放 A→B
+              {t("连续播放 A→B")}
             </button>
           )}
         </div>

@@ -1,6 +1,7 @@
 import { type FormEvent, useMemo, useState } from "react";
 
 import { seconds } from "../../format";
+import { useI18n } from "../../i18n";
 import type {
   ListenerLevel,
   ListenerProfile,
@@ -50,6 +51,7 @@ export function ListeningChat({
   profile: ListenerProfile;
   onLevelChange: (level: ListenerLevel) => Promise<void>;
 }) {
+  const { t } = useI18n();
   const player = usePlayer();
   const snapshot = usePlayerSnapshot();
   const conversation = useSongConversation(historyId);
@@ -94,7 +96,7 @@ export function ListeningChat({
     );
     player.setRange("selection", selection);
     void submit(
-      "请解释当前这 15 秒：我应该先听什么，以及这些声音产生了什么表达作用？",
+      t("请解释当前这 15 秒：我应该先听什么，以及这些声音产生了什么表达作用？"),
       "selection",
       { ...snapshot, selectedRange: selection },
     );
@@ -128,7 +130,7 @@ export function ListeningChat({
     }
     setRangeMode("compare");
     if (!question.trim()) {
-      setQuestion("请比较 A/B 两段的声音变化和表达作用。");
+      setQuestion(t("请比较 A/B 两段的声音变化和表达作用。"));
     }
   };
 
@@ -167,16 +169,16 @@ export function ListeningChat({
     <aside className="panel listening-chat">
       <header>
         <div>
-          <span className="section-number">问</span>
+          <span className="section-number">{t("问")}</span>
           <div>
-            <h2>边听边问</h2>
+            <h2>{t("边听边问")}</h2>
             <p>
-              {seconds(snapshot.currentTime)} · {section}
+              {seconds(snapshot.currentTime)} · {t(section)}
             </p>
           </div>
         </div>
         <select
-          aria-label="我的音乐基础"
+          aria-label={t("我的音乐基础")}
           aria-describedby={levelError ? "listener-level-error" : undefined}
           value={profile.level}
           disabled={updatingLevel}
@@ -184,7 +186,7 @@ export function ListeningChat({
             void updateLevel(event.target.value as ListenerLevel)}
         >
           {Object.entries(LEVEL_LABELS).map(([value, label]) => (
-            <option key={value} value={value}>{label}</option>
+            <option key={value} value={value}>{t(label)}</option>
           ))}
         </select>
       </header>
@@ -194,22 +196,22 @@ export function ListeningChat({
           id="listener-level-error"
           role="alert"
         >
-          {levelError}，已保留原来的音乐基础设置。
+          {t(levelError)}，{t("已保留原来的音乐基础设置。")}
         </p>
       )}
 
       <div className="conversation-toolbar">
         <select
-          aria-label="歌曲对话"
+          aria-label={t("歌曲对话")}
           value={conversation.activeConversationId || ""}
           disabled={conversation.loading}
           onChange={(event) =>
             conversation.selectConversation(event.target.value || null)}
         >
-          <option value="">新对话</option>
+          <option value="">{t("新对话")}</option>
           {conversation.conversations.map((item, index) => (
             <option key={item.id} value={item.id}>
-              {item.title || `导赏对话 ${conversation.conversations.length - index}`}
+              {item.title || `${t("导赏对话")} ${conversation.conversations.length - index}`}
             </option>
           ))}
         </select>
@@ -217,7 +219,7 @@ export function ListeningChat({
           type="button"
           onClick={() => void conversation.createConversation()}
         >
-          ＋ 新对话
+          ＋ {t("新对话")}
         </button>
         {conversation.activeConversationId && (
           <button
@@ -228,38 +230,38 @@ export function ListeningChat({
               if (id) void conversation.deleteConversation(id);
             }}
           >
-            删除
+            {t("删除")}
           </button>
         )}
       </div>
 
       <div className="chat-context-actions">
         <button type="button" onClick={explainCurrent}>
-          解释当前 15 秒
+          {t("解释当前 15 秒")}
         </button>
         <button
           type="button"
           onClick={selectQuestionRange}
           className={rangeMode === "selection" ? "active" : ""}
         >
-          询问框选片段
+          {t("询问框选片段")}
         </button>
         <button
           type="button"
           onClick={selectComparison}
           className={rangeMode === "compare" ? "active" : ""}
         >
-          比较 A/B
+          {t("比较 A/B")}
         </button>
         <button
           type="button"
           onClick={() => setRangeMode("current")}
           className={rangeMode === "current" ? "active" : ""}
         >
-          跟随当前位置
+          {t("跟随当前位置")}
         </button>
       </div>
-      <p className="chat-context-hint" aria-live="polite">{contextHint}</p>
+      <p className="chat-context-hint" aria-live="polite">{t(contextHint)}</p>
 
       <div
         className="chat-messages"
@@ -270,21 +272,21 @@ export function ListeningChat({
       >
         {conversation.loading && (
           <p className="chat-pending" role="status">
-            正在读取歌曲对话…
+            {t("正在读取歌曲对话…")}
           </p>
         )}
         {!conversation.messages.length && !conversation.loading && (
           <div className="chat-empty">
-            <strong>从你的感受开始也可以</strong>
+            <strong>{t("从你的感受开始也可以")}</strong>
             <p>
-              例如：“我觉得这里突然变得很开阔，具体是什么声音造成的？”
+              {t("例如：“我觉得这里突然变得很开阔，具体是什么声音造成的？”")}
             </p>
           </div>
         )}
         {conversation.messages.map((message) => (
           <div className="conversation-turn" key={message.id}>
             <div className="user-question">
-              <span>你</span>
+              <span>{t("你")}</span>
               <p>{message.request.message}</p>
             </div>
             {message.status === "complete" && message.response ? (
@@ -294,11 +296,11 @@ export function ListeningChat({
               />
             ) : message.status === "failed" ? (
               <p className="chat-error" role="alert">
-                {message.error || "回答失败"}
+                {t(message.error || "回答失败")}
               </p>
             ) : (
               <p className="chat-pending" role="status">
-                老师正在整理附近的听觉证据…
+                {t("老师正在整理附近的听觉证据…")}
               </p>
             )}
           </div>
@@ -307,28 +309,28 @@ export function ListeningChat({
 
       {conversation.failedSend && (
         <div className="chat-send-error" role="alert">
-          <p>{conversation.failedSend.error}</p>
+          <p>{t(conversation.failedSend.error)}</p>
           <button
             type="button"
             disabled={conversation.sending}
             onClick={() => void retryFailedSend()}
           >
-            {conversation.sending ? "正在重试…" : "重试同一问题"}
+            {conversation.sending ? t("正在重试…") : t("重试同一问题")}
           </button>
         </div>
       )}
       {conversation.error && !conversation.failedSend && (
-        <p className="chat-error" role="alert">{conversation.error}</p>
+        <p className="chat-error" role="alert">{t(conversation.error)}</p>
       )}
       <form onSubmit={submitForm} className="chat-composer">
         <label htmlFor="music-question">
-          你的问题或理解
+          {t("你的问题或理解")}
           <small>
             {rangeMode === "compare"
-              ? "将比较 A/B 两段"
+              ? t("将比较 A/B 两段")
               : rangeMode === "selection"
-                ? "将携带当前框选范围"
-                : "将携带当前播放位置"}
+                ? t("将携带当前框选范围")
+                : t("将携带当前播放位置")}
           </small>
         </label>
         <textarea
@@ -336,7 +338,7 @@ export function ListeningChat({
           maxLength={4000}
           rows={3}
           value={question}
-          placeholder="我为什么会在这里产生这种感觉？"
+          placeholder={t("我为什么会在这里产生这种感觉？")}
           onChange={(event) => setQuestion(event.target.value)}
         />
         <button
@@ -348,7 +350,7 @@ export function ListeningChat({
             || (rangeMode === "compare" && (!snapshot.rangeA || !snapshot.rangeB))
           }
         >
-          {conversation.sending ? "正在聆听证据…" : "提问"}
+          {conversation.sending ? t("正在聆听证据…") : t("提问")}
         </button>
       </form>
     </aside>

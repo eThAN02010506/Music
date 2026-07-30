@@ -12,6 +12,7 @@ import {
 } from "../../api";
 import { AbortableLatestRequest } from "../../hooks/abortableLatestRequest";
 import { LatestRequest } from "../../hooks/latestRequest";
+import { useI18n } from "../../i18n";
 import type { HistorySummary, JobSnapshot } from "../../types";
 import type { WorkspaceAction } from "./workspaceState";
 
@@ -24,6 +25,7 @@ export function useHistoryNavigation({
   dispatch,
   viewRequests,
 }: HistoryNavigationOptions) {
+  const { t } = useI18n();
   const [history, setHistory] = useState<HistorySummary[]>([]);
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [deletingIds, setDeletingIds] = useState<ReadonlySet<string>>(
@@ -103,7 +105,7 @@ export function useHistoryNavigation({
     const { id, title } = item;
     if (deletingIdsRef.current.has(id)) return;
     const confirmed = window.confirm(
-      `确定永久删除“${title}”吗？\n\n分析记录和关联的源音频将被删除，此操作无法撤销。`,
+      `${t("确定永久删除“{{title}}”吗？", { title })}\n\n${t("分析记录和关联的源音频将被删除，此操作无法撤销。")}`,
     );
     if (!confirmed) return;
     deletingIdsRef.current.add(id);
@@ -125,10 +127,10 @@ export function useHistoryNavigation({
       deletingIdsRef.current.delete(id);
       setDeletingIds(new Set(deletingIdsRef.current));
     }
-  }, [dispatch, refreshHistory]);
+  }, [dispatch, refreshHistory, t]);
 
   const renameHistory = useCallback(async (item: HistorySummary) => {
-    const title = window.prompt("重命名分析", item.title)?.trim();
+    const title = window.prompt(t("重命名分析"), item.title)?.trim();
     if (!title || title === item.title) return;
     try {
       await api.renameHistory(item.id, title);
@@ -136,7 +138,7 @@ export function useHistoryNavigation({
     } catch {
       dispatch({ type: "set-error", error: "重命名失败" });
     }
-  }, [dispatch, refreshHistory]);
+  }, [dispatch, refreshHistory, t]);
 
   const toggleCompare = useCallback((id: string) => {
     dispatch({ type: "comparison-selection-changed" });

@@ -1,4 +1,5 @@
 import { confidenceClass, percent, seconds } from "../../format";
+import { useI18n } from "../../i18n";
 import type { AnalysisResult, Evidence } from "../../types";
 import { usePlayer } from "../player/PlayerContext";
 
@@ -11,12 +12,15 @@ function Confidence({ value }: { value: number | null }) {
 }
 function TagList({
   items,
-  empty = "暂无可靠结果",
+  empty,
 }: {
   items: string[];
   empty?: string;
 }) {
-  if (!items.length) return <p className="empty-copy">{empty}</p>;
+  const { t } = useI18n();
+  if (!items.length) {
+    return <p className="empty-copy">{empty || t("暂无可靠结果")}</p>;
+  }
   return (
     <div className="tag-list">
       {items.map((item) => <span key={item}>{item}</span>)}
@@ -31,6 +35,7 @@ export function AnalysisEvidencePanels({
   result: AnalysisResult;
   duration: number;
 }) {
+  const { t } = useI18n();
   const player = usePlayer();
   return (
     <>
@@ -38,15 +43,15 @@ export function AnalysisEvidencePanels({
         <details>
           <summary>
             <span>
-              <strong>技术证据附录</strong>
-              <small>乐器、主题、情绪和氛围推断</small>
+              <strong>{t("技术证据附录")}</strong>
+              <small>{t("乐器、主题、情绪和氛围推断")}</small>
             </span>
-            <span aria-hidden="true">展开</span>
+            <span aria-hidden="true">{t("展开")}</span>
           </summary>
           <div className="result-grid">
             <section className="compact-panel evidence-subpanel">
-              <header><h3>乐器与声源</h3></header>
-              <TagList items={result.instruments} empty="没有确认到具体乐器" />
+              <header><h3>{t("乐器与声源")}</h3></header>
+              <TagList items={result.instruments} empty={t("没有确认到具体乐器")} />
               {result.sound_events.length > 0 && (
                 <div className="event-list">
                   {result.sound_events.map((event) => (
@@ -65,15 +70,15 @@ export function AnalysisEvidencePanels({
               )}
             </section>
             <section className="compact-panel evidence-subpanel">
-              <header><h3>主题</h3></header>
+              <header><h3>{t("主题")}</h3></header>
               <TagList items={result.themes} />
             </section>
           </div>
 
           <section className="emotion-panel evidence-subpanel">
             <header>
-              <h3>直接情绪证据</h3>
-              <small>来自音色、力度与演唱方式</small>
+              <h3>{t("直接情绪证据")}</h3>
+              <small>{t("来自音色、力度与演唱方式")}</small>
             </header>
             {result.emotion_timeline.length ? (
               <div className="timeline">
@@ -103,15 +108,15 @@ export function AnalysisEvidencePanels({
               </div>
             ) : (
               <p className="empty-copy">
-                模型没有确认直接情绪；这不等于音乐没有氛围。
+                {t("模型没有确认直接情绪；这不等于音乐没有氛围。")}
               </p>
             )}
           </section>
 
           <section className="atmosphere-panel evidence-subpanel">
             <header>
-              <h3>推断氛围</h3>
-              <small>非直接听觉证据</small>
+              <h3>{t("推断氛围")}</h3>
+              <small>{t("非直接听觉证据")}</small>
             </header>
             {result.inferred_atmosphere.length ? (
               <div className="atmosphere-grid">
@@ -124,14 +129,14 @@ export function AnalysisEvidencePanels({
                     <p>
                       {String(
                         item.metadata.basis
-                        || "由歌词、节奏和声音描述综合推断",
+                        || t("由歌词、节奏和声音描述综合推断"),
                       )}
                     </p>
                   </article>
                 ))}
               </div>
             ) : (
-              <p className="empty-copy">证据不足，未生成推断氛围</p>
+              <p className="empty-copy">{t("证据不足，未生成推断氛围")}</p>
             )}
           </section>
         </details>

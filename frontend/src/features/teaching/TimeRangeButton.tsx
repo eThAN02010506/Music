@@ -1,4 +1,5 @@
 import { seconds } from "../../format";
+import { useI18n } from "../../i18n";
 import type { Span } from "../../types";
 import { usePlayer } from "../player/PlayerContext";
 
@@ -11,12 +12,13 @@ export function TimeRangeButton({
   label?: string;
   loop?: boolean;
 }) {
+  const { t } = useI18n();
   const player = usePlayer();
   return (
     <button
       type="button"
       className="time-range-button"
-      title={loop ? "循环播放这段音频" : "跳转并播放这段音频"}
+      title={loop ? t("循环播放这段音频") : t("跳转并播放这段音频")}
       onClick={() => player.playRange(range, loop)}
     >
       <span aria-hidden="true">▶</span>
