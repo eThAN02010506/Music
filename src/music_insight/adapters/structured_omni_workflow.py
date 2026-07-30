@@ -129,6 +129,10 @@ class ChunkAnalysisState:
     themes: list[str] = field(default_factory=list)
     narratives: list[str] = field(default_factory=list)
     evidence: list[Evidence] = field(default_factory=list)
+    vocal_observations: list[tuple[bool, float, int]] = field(
+        default_factory=list
+    )
+    expected_chunks: int = 0
     batch_aborted: bool = False
 
 
@@ -146,7 +150,7 @@ class StructuredOmniAnalysisWorkflow:
     ) -> UnifiedAudioResult:
         model = await self.adapter._model()
         total_chunks = self.adapter._chunk_count(asset.path)
-        state = ChunkAnalysisState()
+        state = ChunkAnalysisState(expected_chunks=total_chunks)
 
         for index, (audio_bytes, start_s, end_s) in enumerate(
             self.adapter._wav_chunks(asset.path),
@@ -310,6 +314,31 @@ class StructuredOmniAnalysisWorkflow:
         state.sound_events.extend(parsed["sound_events"])
         state.emotions.extend(parsed["emotions"])
         state.themes.extend(parsed["themes"])
+        vocals_detected = parsed["vocals_detected"]
+        vocal_confidence = parsed["vocal_confidence"]
+        if vocals_detected is not None and vocal_confidence is not None:
+            state.vocal_observations.append(
+                (vocals_detected, vocal_confidence, index)
+            )
+            state.evidence.append(
+                Evidence(
+                    id=f"omni.chunk.{index}.vocal_presence",
+                    source=self.adapter.source,
+                    kind=EvidenceType.INFERRED,
+                    text=(
+                        "该音频分块检测到人声。"
+                        if vocals_detected
+                        else "该音频分块未检测到人声。"
+                    ),
+                    confidence=vocal_confidence,
+                    span=TimeSpan(start_s=start_s, end_s=end_s),
+                    metadata={
+                        "model": model,
+                        "vocals_detected": vocals_detected,
+                        "basis": "direct audio",
+                    },
+                )
+            )
         if parsed["narrative"]:
             state.narratives.append(parsed["narrative"])
         state.evidence.append(
@@ -746,6 +775,9 @@ class StructuredOmniAnalysisWorkflow:
         themes: list[str],
         inferred_atmosphere: list[Evidence],
     ) -> UnifiedAudioResult:
+        vocals_detected, vocal_confidence, vocal_evidence = (
+            _aggregate_vocal_presence(state, self.adapter.source)
+        )
         return UnifiedAudioResult(
             asr=AsrResult(
                 model=self.adapter.source,
@@ -772,7 +804,9 @@ class StructuredOmniAnalysisWorkflow:
                 inferred_atmosphere=inferred_atmosphere,
                 themes=state.themes,
                 narrative=" ".join(state.narratives) or None,
-                evidence=state.evidence,
+                vocals_detected=vocals_detected,
+                vocal_confidence=vocal_confidence,
+                evidence=[*state.evidence, *vocal_evidence],
             ),
             literary=LiteraryResult(
                 model=self.adapter.source,
@@ -781,3 +815,57 @@ class StructuredOmniAnalysisWorkflow:
                 evidence=[],
             ),
         )
+
+
+def _aggregate_vocal_presence(
+    state: ChunkAnalysisState,
+    source: str,
+) -> tuple[bool | None, float | None, list[Evidence]]:
+    """Aggregate chunk judgments without treating an empty transcript as silence."""
+
+    expected = max(1, state.expected_chunks)
+    present = [
+        (confidence, index)
+        for detected, confidence, index in state.vocal_observations
+        if detected and confidence >= 0.6
+    ]
+    if present:
+        confidence = max(value for value, _ in present)
+        detected: bool | None = True
+        reason = "至少一个音频分块以足够置信度检测到人声。"
+    else:
+        absent = [
+            (confidence, index)
+            for detected, confidence, index in state.vocal_observations
+            if not detected and confidence >= 0.7
+        ]
+        coverage = len(absent) / expected
+        if coverage >= 0.8:
+            confidence = min(
+                sum(value for value, _ in absent) / len(absent),
+                coverage,
+            )
+            detected = False
+            reason = "绝大多数音频分块一致且高置信地报告无人声。"
+        else:
+            return None, None, []
+    supporting_ids = [
+        f"omni.chunk.{index}.vocal_presence"
+        for _, index in (present if detected else absent)
+    ]
+    return detected, confidence, [
+        Evidence(
+            id="omni.vocal_presence",
+            source=source,
+            kind=EvidenceType.INFERRED,
+            text=reason,
+            confidence=confidence,
+            metadata={
+                "vocals_detected": detected,
+                "expected_chunks": state.expected_chunks,
+                "classified_chunks": len(state.vocal_observations),
+                "supporting_evidence_ids": supporting_ids,
+                "aggregation": "conservative_chunk_consensus",
+            },
+        )
+    ]

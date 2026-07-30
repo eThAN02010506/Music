@@ -15,6 +15,7 @@ export function TeachingWorkspace({
   loading,
   generating,
   error,
+  instrumental,
   onGenerate,
   onLevelChange,
   onConceptToggle,
@@ -25,6 +26,7 @@ export function TeachingWorkspace({
   loading: boolean;
   generating: boolean;
   error: string;
+  instrumental: boolean;
   onGenerate: (options?: TeachingGenerationOptions) => Promise<unknown>;
   onLevelChange: (level: ListenerLevel) => Promise<void>;
   onConceptToggle: (concept: string) => Promise<void>;
@@ -132,6 +134,7 @@ export function TeachingWorkspace({
       <TeachingOverview map={map} />
       <LearningProgress
         profile={profile}
+        instrumental={instrumental}
         onConceptToggle={onConceptToggle}
       />
       <div className="teaching-main-grid">
@@ -161,13 +164,19 @@ const TRAINING_CONCEPTS = [
 
 function LearningProgress({
   profile,
+  instrumental,
   onConceptToggle,
 }: {
   profile: ListenerProfile;
+  instrumental: boolean;
   onConceptToggle: (concept: string) => Promise<void>;
 }) {
+  const concepts = instrumental
+    ? TRAINING_CONCEPTS.filter((concept) => concept !== "歌词与音乐关系")
+    : TRAINING_CONCEPTS;
   const learned = new Set(profile.learned_concepts);
-  const nextConcept = TRAINING_CONCEPTS.find((concept) => !learned.has(concept));
+  const learnedVisible = concepts.filter((concept) => learned.has(concept));
+  const nextConcept = concepts.find((concept) => !learned.has(concept));
   return (
     <section className="panel learning-progress">
       <header>
@@ -175,14 +184,14 @@ function LearningProgress({
           <span className="section-kicker">LISTENING PRACTICE</span>
           <h3>我的听觉训练进度</h3>
         </div>
-        <small>{learned.size}/{TRAINING_CONCEPTS.length} 个核心概念</small>
+        <small>{learnedVisible.length}/{concepts.length} 个核心概念</small>
       </header>
       <p>
         只有你确认“已经能听出”后才会记录；系统不会因为回答过一次就自动判定学会。
         {nextConcept && ` 下一项建议关注：${nextConcept}。`}
       </p>
       <div className="concept-progress-list">
-        {TRAINING_CONCEPTS.map((concept) => (
+        {concepts.map((concept) => (
           <button
             key={concept}
             type="button"

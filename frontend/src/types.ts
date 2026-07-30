@@ -45,6 +45,15 @@ export interface DspResult {
   evidence: Evidence[];
 }
 
+export type VocalPresenceStatus = "vocals" | "instrumental" | "unknown";
+
+export interface VocalPresence {
+  status: VocalPresenceStatus;
+  confidence: number | null;
+  reason: string;
+  evidence_ids: string[];
+}
+
 export interface AnalysisResult {
   title: string | null;
   summary: string;
@@ -56,6 +65,7 @@ export interface AnalysisResult {
   themes: string[];
   technical_metrics: DspResult;
   evidence: Evidence[];
+  vocal_presence: VocalPresence;
   warnings: string[];
 }
 

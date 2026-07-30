@@ -2,7 +2,11 @@ import { useMemo } from "react";
 
 import { SignalMark } from "../../components/SignalMark";
 import { percent } from "../../format";
-import type { AnalysisResult, LyricsSegment } from "../../types";
+import type {
+  AnalysisResult,
+  LyricsSegment,
+  VocalPresence,
+} from "../../types";
 import { LyricsPanel } from "../lyrics/LyricsPanel";
 import { InsightPlayer } from "../player/InsightPlayer";
 import { PlayerProvider } from "../player/PlayerContext";
@@ -42,6 +46,18 @@ export function ResultPanel({
   const durationFallback = useMemo(() => analysisDuration(result), [result]);
   const title = result.title || fileName.replace(/\.[^.]+$/, "");
   const teaching = useTeachingExperience(historyId);
+  const vocalPresence: VocalPresence = result.vocal_presence ?? {
+    status: "unknown",
+    confidence: null,
+    reason: "这份旧分析没有保存人声状态，需要重新分析后确认。",
+    evidence_ids: [],
+  };
+  const instrumental = vocalPresence.status === "instrumental";
+  const modeLabel = instrumental
+    ? "纯器乐"
+    : vocalPresence.status === "vocals"
+      ? "有人声"
+      : "未确认";
 
   return (
     <PlayerProvider durationFallback={durationFallback}>
@@ -56,6 +72,7 @@ export function ResultPanel({
               audioUrl={audioUrl}
               title={title}
               historyId={historyId}
+              vocalPresence={vocalPresence}
               sections={teaching.guide?.understanding_map?.sections}
             />
           </div>
@@ -80,9 +97,12 @@ export function ResultPanel({
               </small>
             </div>
             <div>
-              <span>LYRICS</span>
-              <strong>{result.lyrics.length}</strong>
-              <small>个片段</small>
+              <span>MODE</span>
+              <strong>{modeLabel}</strong>
+              <small>
+                可信度 {percent(vocalPresence.confidence)}
+                {result.lyrics.length > 0 ? ` · ${result.lyrics.length} 段歌词` : ""}
+              </small>
             </div>
           </div>
         </section>
@@ -101,6 +121,7 @@ export function ResultPanel({
           loading={teaching.loading}
           generating={teaching.generating}
           error={teaching.error}
+          instrumental={instrumental}
           onGenerate={teaching.generate}
           onLevelChange={teaching.updateLevel}
           onConceptToggle={teaching.toggleConcept}
@@ -118,10 +139,12 @@ export function ResultPanel({
           result={result}
           duration={durationFallback}
         />
-        <SingingComparison
-          key={historyId || "unsaved"}
-          historyId={historyId}
-        />
+        {!instrumental && (
+          <SingingComparison
+            key={historyId || "unsaved"}
+            historyId={historyId}
+          />
+        )}
       </div>
     </PlayerProvider>
   );

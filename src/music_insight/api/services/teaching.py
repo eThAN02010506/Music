@@ -532,6 +532,7 @@ async def answer_music_question(
             conversation_history=_turns_from_records(message_records),
             listener_profile=profile_from_record(profile_record),
             analysis_summary=entry.result.summary[:4000],
+            vocal_presence=entry.result.vocal_presence,
             duration_s=duration_s,
         )
         if _should_relisten(payload, context):

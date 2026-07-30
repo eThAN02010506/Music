@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from music_insight.schemas import VocalPresenceStatus
 from music_insight.teaching.grounding import (
     SourceFact,
     analysis_source_catalog,
@@ -125,6 +126,10 @@ class EvidenceTeachingModel:
         warnings = [
             "当前导赏地图由已有时间证据保守生成；曲式名称和主观意境可能有其他解释。"
         ]
+        if result.vocal_presence.status is VocalPresenceStatus.INSTRUMENTAL:
+            warnings.append(
+                "已按纯器乐模式组织导赏；不会补写歌词、主歌或副歌标签。"
+            )
         if len(key_moments) < 3:
             warnings.append("时间证据较少，暂时无法可靠推荐三个关键时刻。")
         if not events:

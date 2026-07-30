@@ -35,6 +35,12 @@ const result: AnalysisResult = {
     evidence: [],
   },
   evidence: [],
+  vocal_presence: {
+    status: "unknown",
+    confidence: null,
+    reason: "test",
+    evidence_ids: [],
+  },
   warnings: [],
 };
 

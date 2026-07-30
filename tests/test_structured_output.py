@@ -16,6 +16,8 @@ def _chunk_payload() -> dict[str, Any]:
     return {
         "lyrics": [],
         "instruments": [],
+        "vocals_detected": None,
+        "vocal_confidence": None,
         "sound_events": [],
         "emotion_timeline": [],
         "themes": [],

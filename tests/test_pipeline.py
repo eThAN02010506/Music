@@ -34,6 +34,7 @@ from music_insight.schemas import (
     LyricsSegment,
     TimeSpan,
     UnifiedAudioResult,
+    VocalPresenceStatus,
 )
 from music_insight.storage.local import LocalAudioStore, UploadTooLargeError
 
@@ -82,6 +83,8 @@ class FakeRecoveringOmni(QwenOmniUnifiedAdapter):
         return {
             "lyrics": [],
             "instruments": ["钢琴"],
+            "vocals_detected": True,
+            "vocal_confidence": 0.9,
             "sound_events": [],
             "emotion_timeline": [],
             "themes": [],
@@ -112,6 +115,32 @@ class FakeHallucinatedRecoveryOmni(FakeRecoveringOmni):
             ],
             "emotion_timeline": [],
         }
+
+
+class FakeInstrumentalOmni(FakeRecoveringOmni):
+    async def _analyze_chunk(self, **kwargs):
+        return {
+            "lyrics": [],
+            "instruments": ["钢琴"],
+            "vocals_detected": False,
+            "vocal_confidence": 0.92,
+            "sound_events": [],
+            "emotion_timeline": [],
+            "themes": ["器乐"],
+            "narrative": "钢琴持续演奏。",
+        }
+
+    async def _recover_missing(self, **kwargs):
+        return {"lyrics": []}
+
+
+class FakePartiallyClassifiedOmni(FakeInstrumentalOmni):
+    async def _analyze_chunk(self, **kwargs):
+        payload = await super()._analyze_chunk(**kwargs)
+        if kwargs["start_s"] > 0:
+            payload["vocals_detected"] = None
+            payload["vocal_confidence"] = None
+        return payload
 
 
 class FakeEmotionMissingOmni(QwenOmniUnifiedAdapter):
@@ -191,6 +220,7 @@ class FakeJsonRetryOmni(QwenOmniUnifiedAdapter):
             return '{"lyrics": [{"text": "broken"} "themes": []}'
         return (
             '{"lyrics": [], "instruments": [], "sound_events": [], '
+            '"vocals_detected": null, "vocal_confidence": null, '
             '"emotion_timeline": [], "themes": [], "narrative": ""}'
         )
 
@@ -306,6 +336,7 @@ def test_orchestrator_uses_only_unified_model(tmp_path):
     assert result.instruments == ["钢琴"]
     assert result.summary.startswith("歌词、钢琴和节拍")
     assert result.themes == ["夜空", "希望"]
+    assert result.vocal_presence.status is VocalPresenceStatus.VOCALS
     assert result.warnings == []
 
 
@@ -321,6 +352,7 @@ def test_orchestrator_degrades_when_unified_model_fails(tmp_path):
 
     assert result.lyrics == []
     assert result.technical_metrics.bpm == 120.0
+    assert result.vocal_presence.status is VocalPresenceStatus.UNKNOWN
     assert any(item.id == "omni.error" for item in result.evidence)
     assert any("unified test failure" in warning for warning in result.warnings)
 
@@ -712,6 +744,50 @@ def test_missing_lyrics_recovery_is_quality_filtered_before_use(tmp_path):
     assert quality_evidence.metadata["issues"]
 
 
+def test_unified_adapter_confirms_instrumental_only_from_chunk_consensus(
+    tmp_path,
+):
+    audio = tmp_path / "instrumental.wav"
+    _write_test_audio(audio, seconds=6.0, sample_rate=16_000)
+    adapter = FakeInstrumentalOmni(
+        endpoint="http://127.0.0.1:9999",
+        model="test-model",
+        chunk_seconds=5,
+    )
+
+    result = asyncio.run(adapter.analyze(_asset(audio), DspResult()))
+
+    assert result.asr.lyrics == []
+    assert result.scene.vocals_detected is False
+    assert result.scene.vocal_confidence == pytest.approx(0.92)
+    aggregate = next(
+        item
+        for item in result.scene.evidence
+        if item.id == "omni.vocal_presence"
+    )
+    assert aggregate.metadata["expected_chunks"] == 2
+    assert aggregate.metadata["classified_chunks"] == 2
+
+
+def test_unified_adapter_keeps_partial_no_vocal_coverage_unknown(tmp_path):
+    audio = tmp_path / "partial-instrumental.wav"
+    _write_test_audio(audio, seconds=6.0, sample_rate=16_000)
+    adapter = FakePartiallyClassifiedOmni(
+        endpoint="http://127.0.0.1:9999",
+        model="test-model",
+        chunk_seconds=5,
+    )
+
+    result = asyncio.run(adapter.analyze(_asset(audio), DspResult()))
+
+    assert result.scene.vocals_detected is None
+    assert result.scene.vocal_confidence is None
+    assert not any(
+        item.id == "omni.vocal_presence"
+        for item in result.scene.evidence
+    )
+
+
 def test_unified_adapter_reports_chunk_and_synthesis_progress(tmp_path):
     audio = tmp_path / "progress.wav"
     _write_test_audio(audio, seconds=6.0, sample_rate=16_000)
@@ -897,6 +973,8 @@ def test_chat_json_retries_malformed_success_response():
     assert parsed == {
         "lyrics": [],
         "instruments": [],
+        "vocals_detected": None,
+        "vocal_confidence": None,
         "sound_events": [],
         "emotion_timeline": [],
         "themes": [],

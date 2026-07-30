@@ -47,6 +47,10 @@ def chunk_response_format() -> dict[str, Any]:
                 "properties": {
                     "lyrics": {"type": "array", "items": lyric_item},
                     "instruments": {"type": "array", "items": {"type": "string"}},
+                    "vocals_detected": {
+                        "anyOf": [{"type": "boolean"}, {"type": "null"}]
+                    },
+                    "vocal_confidence": nullable_confidence,
                     "sound_events": {"type": "array", "items": timed_item},
                     "emotion_timeline": {"type": "array", "items": timed_item},
                     "themes": {"type": "array", "items": {"type": "string"}},
@@ -55,6 +59,8 @@ def chunk_response_format() -> dict[str, Any]:
                 "required": [
                     "lyrics",
                     "instruments",
+                    "vocals_detected",
+                    "vocal_confidence",
                     "sound_events",
                     "emotion_timeline",
                     "themes",

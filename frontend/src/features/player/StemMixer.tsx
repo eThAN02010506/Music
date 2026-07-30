@@ -1,13 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, API_BASE, isAbortError } from "../../api";
-import type { StemName, StemStatus, StemTrack } from "../../types";
+import type {
+  StemName,
+  StemStatus,
+  StemTrack,
+  VocalPresence,
+} from "../../types";
 import { usePlayer } from "./PlayerContext";
 
 
 const STEM_POLL_MS = 2_000;
 
-export function StemMixer({ historyId }: { historyId: string }) {
+export function StemMixer({
+  historyId,
+  vocalPresence,
+}: {
+  historyId: string;
+  vocalPresence: VocalPresence;
+}) {
   const player = usePlayer();
   const [status, setStatus] = useState<StemStatus | null>(null);
   const [generating, setGenerating] = useState(false);
@@ -154,6 +165,15 @@ export function StemMixer({ historyId }: { historyId: string }) {
               : "正在载入四轨…"}
         </button>
       </header>
+      {vocalPresence.status === "instrumental" && (
+        <div className="instrumental-stem-note">
+          <strong>纯器乐提示</strong>
+          <span>
+            古典音乐通常主要落在“其他乐器”和“低音”；“人声”轨若有声音，
+            更可能是串音或分离伪影，不代表作品包含歌唱。
+          </span>
+        </div>
+      )}
       <div className="stem-track-controls">
         {tracks.map((track) => {
           const isSolo = solo === track.name;

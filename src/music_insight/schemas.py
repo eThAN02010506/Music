@@ -12,6 +12,23 @@ class EvidenceType(StrEnum):
     COMPUTED = "computed"
 
 
+class VocalPresenceStatus(StrEnum):
+    VOCALS = "vocals"
+    INSTRUMENTAL = "instrumental"
+    UNKNOWN = "unknown"
+
+
+class VocalPresenceResult(BaseModel):
+    status: VocalPresenceStatus = VocalPresenceStatus.UNKNOWN
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    reason: str = Field(
+        default="现有证据不足以确认是否包含人声。",
+        min_length=1,
+        max_length=600,
+    )
+    evidence_ids: list[str] = Field(default_factory=list, max_length=32)
+
+
 class TimeSpan(BaseModel):
     start_s: float = Field(ge=0)
     end_s: float = Field(ge=0)
@@ -88,6 +105,8 @@ class AudioSceneResult(BaseModel):
     inferred_atmosphere: list[Evidence] = Field(default_factory=list)
     themes: list[str] = Field(default_factory=list)
     narrative: str | None = None
+    vocals_detected: bool | None = None
+    vocal_confidence: float | None = Field(default=None, ge=0, le=1)
     evidence: list[Evidence] = Field(default_factory=list)
 
 
@@ -120,6 +139,9 @@ class AnalysisResult(BaseModel):
     themes: list[str]
     technical_metrics: DspResult
     evidence: list[Evidence]
+    vocal_presence: VocalPresenceResult = Field(
+        default_factory=VocalPresenceResult
+    )
     warnings: list[str] = Field(default_factory=list)
 
 

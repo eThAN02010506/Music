@@ -16,6 +16,7 @@ from music_insight.schemas import (
     EvidenceType,
     LyricsSegment,
     TimeSpan,
+    VocalPresenceStatus,
 )
 from music_insight.storage.assets import content_cache_key
 
@@ -120,6 +121,8 @@ def test_history_persists_renames_and_deletes(tmp_path):
     assert revised.revision_count == 1
     assert revised.result is not None
     assert revised.result.lyrics[0].text == "人工校对歌词"
+    assert revised.result.vocal_presence.status is VocalPresenceStatus.VOCALS
+    assert revised.result.vocal_presence.confidence == 1.0
     assert revised.result.evidence[-1].source == "用户校对"
     revisions = store.revisions("job-1", user_id=user_id)
     assert len(revisions) == 1

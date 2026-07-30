@@ -7,7 +7,11 @@ from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from music_insight.schemas import AnalysisResult, Evidence
+from music_insight.schemas import (
+    AnalysisResult,
+    Evidence,
+    VocalPresenceResult,
+)
 
 
 class TeachingModel(BaseModel):
@@ -324,6 +328,9 @@ class TeachingChatContext(TeachingModel):
     )
     listener_profile: ListenerProfile
     analysis_summary: str = Field(min_length=1, max_length=4000)
+    vocal_presence: VocalPresenceResult = Field(
+        default_factory=VocalPresenceResult
+    )
     duration_s: float = Field(gt=0)
 
 

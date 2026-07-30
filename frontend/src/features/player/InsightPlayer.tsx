@@ -2,7 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, API_BASE, isAbortError } from "../../api";
 import { seconds } from "../../format";
-import type { HistoryWaveform, SectionMarker } from "../../types";
+import type {
+  HistoryWaveform,
+  SectionMarker,
+  VocalPresence,
+} from "../../types";
 import { rangeAround } from "./playerController";
 import { usePlayer, usePlayerSnapshot } from "./PlayerContext";
 import { WaveformView } from "./WaveformView";
@@ -13,11 +17,13 @@ export function InsightPlayer({
   audioUrl,
   title,
   historyId,
+  vocalPresence,
   sections = [],
 }: {
   audioUrl: string;
   title: string;
   historyId: string | null;
+  vocalPresence: VocalPresence;
   sections?: SectionMarker[];
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -84,7 +90,12 @@ export function InsightPlayer({
         controls
         preload="metadata"
       />
-      {historyId && <StemMixer historyId={historyId} />}
+      {historyId && (
+        <StemMixer
+          historyId={historyId}
+          vocalPresence={vocalPresence}
+        />
+      )}
       {media && waveform && (
         <WaveformView
           media={media}

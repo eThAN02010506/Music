@@ -232,6 +232,12 @@ def parse_chunk(
             placeholder_values=placeholder_values,
             label_aliases=label_aliases,
         ),
+        "vocals_detected": (
+            payload.get("vocals_detected")
+            if isinstance(payload.get("vocals_detected"), bool)
+            else None
+        ),
+        "vocal_confidence": confidence(payload.get("vocal_confidence")),
         "sound_events": sound_events,
         "emotions": emotions,
         "themes": strings(

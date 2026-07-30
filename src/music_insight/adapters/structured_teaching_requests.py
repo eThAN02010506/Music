@@ -40,6 +40,7 @@ def understanding_map_request(
         "listener_level": context.listener_profile.level.value,
         "listener_preferences": context.listener_profile.preferences,
         "analysis_summary": context.result.summary[:4000],
+        "vocal_presence": context.result.vocal_presence.model_dump(mode="json"),
         "themes": context.result.themes[:12],
         "instruments": context.result.instruments[:20],
         "sources": [_fact_payload(fact) for fact in facts],
@@ -54,6 +55,10 @@ def understanding_map_request(
         "interpretation 写基于事实的解释，alternative_readings 写非唯一理解。"
         "sections 必须按时间排序且不重叠；events、emotional_arc、key_moments"
         "均按时间排序。挑选不超过五个关键时刻。"
+        "若 vocal_presence.status 为 instrumental，应把它当作纯器乐导赏："
+        "不补写歌词、主歌或副歌，优先讨论主题材料、声部进入、织体、和声、"
+        "节奏、音色、力度与空间；曲式名称没有证据时使用中性段落标签。"
+        "若为 unknown，不得仅因歌词为空就断言纯器乐。"
         "只输出符合指定 schema 的 JSON 对象。"
     )
     return {
@@ -131,6 +136,7 @@ def teaching_chat_request(
         "current_section": _model_payload(context.current_section),
         "question": context.question,
         "analysis_summary": context.analysis_summary,
+        "vocal_presence": context.vocal_presence.model_dump(mode="json"),
         "listener_profile": context.listener_profile.model_dump(mode="json"),
         "conversation_history": [
             {
@@ -154,6 +160,9 @@ def teaching_chat_request(
         "确实没有可引用来源时设为 true、confidence 不得超过 0.4，并明确"
         "说明证据不足，不得补写声音事实。"
         "不要将意境描述成唯一答案，不得猜测创作者心理。"
+        "若 vocal_presence.status 为 instrumental，回答应聚焦器乐声部、织体、"
+        "和声、节奏、音色和演奏变化，不得虚构歌词或歌唱意图；若为 unknown，"
+        "应明确人声状态尚未确认。"
         "只输出符合指定 schema 的 JSON 对象。"
     )
     return {

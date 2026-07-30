@@ -236,6 +236,17 @@ export function LyricsPanel({
         </div>
       </header>
 
+      {result.vocal_presence?.status === "instrumental" && (
+        <div className="instrumental-mode-note">
+          <strong>纯器乐模式</strong>
+          <p>
+            {result.vocal_presence.reason}
+            导赏将优先关注主题材料、声部、织体、和声、力度与音色。
+            如果判断有误，仍可在这里人工添加歌词进行纠正。
+          </p>
+        </div>
+      )}
+
       {qualityEvents.length > 0 && selectedRevision === "current" && (
         <div className="lyrics-quality">
           <strong>自动质量检查处理了 {qualityEvents.length} 个分块</strong>

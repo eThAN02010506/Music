@@ -26,6 +26,7 @@ from music_insight.schemas import (
     TimeSpan,
     UnifiedAudioResult,
     VerifiedLyricsSynthesisResult,
+    VocalPresenceStatus,
 )
 
 
@@ -865,6 +866,12 @@ def test_verified_silence_does_not_clear_audio_report_when_primary_was_empty(
     result = asyncio.run(orchestrator.analyze(_asset(audio)))
 
     assert result.lyrics == []
+    assert result.vocal_presence.status is VocalPresenceStatus.INSTRUMENTAL
+    assert result.vocal_presence.confidence == 0.95
+    assert not any(
+        "没有足够证据断言为纯器乐" in warning
+        for warning in result.warnings
+    )
     assert result.summary == "钢琴形成宁静的纯器乐声景。"
     assert result.themes == ["纯器乐"]
     assert [item.text for item in result.inferred_atmosphere] == [

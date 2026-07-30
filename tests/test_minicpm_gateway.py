@@ -363,6 +363,8 @@ def test_adapter_inherits_provider_neutral_schema_gate():
     valid = {
         "lyrics": [],
         "instruments": [],
+        "vocals_detected": None,
+        "vocal_confidence": None,
         "sound_events": [],
         "emotion_timeline": [],
         "themes": [],

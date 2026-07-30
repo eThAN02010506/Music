@@ -21,6 +21,8 @@ from music_insight.schemas import (
     EvidenceType,
     LyricsSegment,
     TimeSpan,
+    VocalPresenceResult,
+    VocalPresenceStatus,
 )
 from music_insight.teaching.models import (
     ListenerProfile,
@@ -76,6 +78,7 @@ def _map_context(*, lyric_text: str = "Hold on") -> MapGenerationContext:
 def _map_payload(
     *,
     evidence_source_id: str = "sound_events:0",
+    lyrics_source_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "core_expression": "从克制逐渐走向明亮。",
@@ -110,7 +113,11 @@ def _map_payload(
                 "interpretation": "听感因此从停顿转向展开。",
                 "expressive_role": "推动情绪向前。",
                 "evidence_source_ids": [evidence_source_id],
-                "lyrics_source_ids": ["lyrics:0"],
+                "lyrics_source_ids": (
+                    ["lyrics:0"]
+                    if lyrics_source_ids is None
+                    else lyrics_source_ids
+                ),
                 "listening_task": "循环播放并只数钢琴音符密度。",
                 "alternative_readings": ["也可听作逐渐获得确定感。"],
                 "confidence": 0.8,
@@ -263,6 +270,35 @@ def test_map_parser_rejects_unknown_source_even_when_wire_schema_is_valid() -> N
 
     with pytest.raises(ValueError, match="不存在的分析证据"):
         asyncio.run(adapter.build_understanding_map(_map_context()))
+
+
+def test_map_request_explicitly_switches_to_instrumental_teaching() -> None:
+    result = _analysis_result().model_copy(
+        update={
+            "lyrics": [],
+            "vocal_presence": VocalPresenceResult(
+                status=VocalPresenceStatus.INSTRUMENTAL,
+                confidence=0.92,
+                reason="逐块音频分析一致报告无人声。",
+                evidence_ids=["omni.vocal_presence"],
+            ),
+        }
+    )
+    context = MapGenerationContext(
+        analysis_id="bach-1",
+        result=result,
+        duration_s=20,
+        listener_profile=ListenerProfile(),
+    )
+    adapter = _SequenceTeachingAdapter(
+        [_map_payload(lyrics_source_ids=[])]
+    )
+
+    asyncio.run(adapter.build_understanding_map(context))
+
+    user_text = adapter.requests[0]["messages"][1]["content"]
+    assert '"status":"instrumental"' in user_text
+    assert "不补写歌词、主歌或副歌" in user_text
 
 
 def test_chat_request_is_time_local_strict_and_question_is_untrusted() -> None:

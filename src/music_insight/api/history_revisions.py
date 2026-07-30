@@ -11,6 +11,8 @@ from music_insight.schemas import (
     Evidence,
     EvidenceType,
     LyricsSegment,
+    VocalPresenceResult,
+    VocalPresenceStatus,
 )
 
 
@@ -37,6 +39,18 @@ def apply_lyrics_revision(
         update={
             "lyrics": lyrics,
             "evidence": [*result.evidence, manual_evidence],
+            **(
+                {
+                    "vocal_presence": VocalPresenceResult(
+                        status=VocalPresenceStatus.VOCALS,
+                        confidence=1.0,
+                        reason="用户人工确认并保存了歌词。",
+                        evidence_ids=[manual_evidence.id],
+                    )
+                }
+                if lyrics
+                else {}
+            ),
         }
     )
 

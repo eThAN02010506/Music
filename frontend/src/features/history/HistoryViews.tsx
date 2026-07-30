@@ -136,6 +136,14 @@ export function ComparisonPanel({ entries }: { entries: HistoryDetail[] }) {
     ["时长", (entry) => seconds(entry.duration_s)],
     ["BPM", (entry) => entry.result?.technical_metrics.bpm?.toFixed(1) || "—"],
     ["调性", (entry) => entry.result?.technical_metrics.key || "—"],
+    ["形式", (entry) => {
+      const status = entry.result?.vocal_presence?.status;
+      return status === "instrumental"
+        ? "纯器乐"
+        : status === "vocals"
+          ? "有人声"
+          : "未确认";
+    }],
     ["歌词", (entry) => `${entry.lyrics_count} 个片段`],
     ["乐器", (entry) => entry.instruments.join("、") || "未确认"],
     ["主题", (entry) => entry.result?.themes.join("、") || "未确认"],

@@ -5,6 +5,8 @@ from music_insight.schemas import (
     DspResult,
     Evidence,
     LiteraryResult,
+    VocalPresenceResult,
+    VocalPresenceStatus,
 )
 
 
@@ -27,12 +29,20 @@ class FusionEngine:
             *dsp.energy_curve,
         ]
         evidence = list({item.id: item for item in evidence_candidates}.values())
+        vocal_presence = _resolve_vocal_presence(asr, scene, evidence)
 
         warnings = []
         if not asr.lyrics:
-            warnings.append(
-                "统一模型未能确认可靠歌词；声景与本地 DSP 分析仍可用。"
-            )
+            if vocal_presence.status is VocalPresenceStatus.UNKNOWN:
+                warnings.append(
+                    "未确认可靠歌词，也没有足够证据断言为纯器乐；"
+                    "声景与本地 DSP 分析仍可用。"
+                )
+            elif vocal_presence.status is VocalPresenceStatus.VOCALS:
+                warnings.append(
+                    "音频证据提示存在人声，但尚未确认可靠歌词；"
+                    "不会根据人声存在自动补写歌词。"
+                )
         error_evidence = [item for item in evidence if item.id.endswith(".error")]
         if error_evidence:
             warnings.append(
@@ -72,5 +82,81 @@ class FusionEngine:
             themes=literary.themes,
             technical_metrics=dsp,
             evidence=evidence,
+            vocal_presence=vocal_presence,
             warnings=warnings,
         )
+
+
+def _resolve_vocal_presence(
+    asr: AsrResult,
+    scene: AudioSceneResult,
+    evidence: list[Evidence],
+) -> VocalPresenceResult:
+    verified_silence = next(
+        (
+            item
+            for item in evidence
+            if item.id == "asr.verifier.verified_silence"
+            and item.confidence is not None
+            and item.confidence >= 0.8
+        ),
+        None,
+    )
+    if verified_silence is not None:
+        return VocalPresenceResult(
+            status=VocalPresenceStatus.INSTRUMENTAL,
+            confidence=verified_silence.confidence,
+            reason="专用 ASR 提供了高置信无人声证据。",
+            evidence_ids=[verified_silence.id],
+        )
+
+    if asr.lyrics:
+        known_confidences = [
+            lyric.confidence
+            for lyric in asr.lyrics
+            if lyric.confidence is not None
+        ]
+        confidence = (
+            sum(known_confidences) / len(known_confidences)
+            if known_confidences
+            else 0.7
+        )
+        transcript_ids = [
+            item.id
+            for item in asr.evidence
+            if item.id.startswith(("omni.transcript", "asr.verifier.verified"))
+        ]
+        return VocalPresenceResult(
+            status=VocalPresenceStatus.VOCALS,
+            confidence=confidence,
+            reason="已确认到通过质量检查的歌词片段。",
+            evidence_ids=transcript_ids,
+        )
+
+    scene_evidence = next(
+        (item for item in evidence if item.id == "omni.vocal_presence"),
+        None,
+    )
+    if (
+        scene.vocals_detected is True
+        and scene.vocal_confidence is not None
+        and scene.vocal_confidence >= 0.6
+    ):
+        return VocalPresenceResult(
+            status=VocalPresenceStatus.VOCALS,
+            confidence=scene.vocal_confidence,
+            reason="逐块音频分析至少在一个时段检测到人声。",
+            evidence_ids=[scene_evidence.id] if scene_evidence else [],
+        )
+    if (
+        scene.vocals_detected is False
+        and scene.vocal_confidence is not None
+        and scene.vocal_confidence >= 0.75
+    ):
+        return VocalPresenceResult(
+            status=VocalPresenceStatus.INSTRUMENTAL,
+            confidence=scene.vocal_confidence,
+            reason="逐块音频分析在足够覆盖范围内一致报告无人声。",
+            evidence_ids=[scene_evidence.id] if scene_evidence else [],
+        )
+    return VocalPresenceResult()
