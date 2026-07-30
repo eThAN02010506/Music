@@ -41,6 +41,37 @@ export function rangeAround(
   return { start_s, end_s };
 }
 
+export function adjacentComparisonRanges(
+  currentTime: number,
+  duration: number,
+  windowSeconds = 15,
+): [Span, Span] {
+  const safeDuration = Number.isFinite(duration)
+    ? Math.max(duration, MIN_RANGE_SECONDS * 2)
+    : 30;
+  const safeWindow = Math.min(
+    Math.max(
+      Number.isFinite(windowSeconds) ? windowSeconds : 15,
+      MIN_RANGE_SECONDS,
+    ),
+    safeDuration / 2,
+  );
+  const centre = clampTime(currentTime, safeDuration);
+  let firstStart = centre - safeWindow;
+  let secondStart = centre;
+  if (firstStart < 0) {
+    firstStart = 0;
+    secondStart = safeWindow;
+  } else if (secondStart + safeWindow > safeDuration) {
+    secondStart = safeDuration - safeWindow;
+    firstStart = secondStart - safeWindow;
+  }
+  return [
+    { start_s: firstStart, end_s: firstStart + safeWindow },
+    { start_s: secondStart, end_s: secondStart + safeWindow },
+  ];
+}
+
 export function sanitizePlayerAction(
   action: PlayerAction,
   duration: number,

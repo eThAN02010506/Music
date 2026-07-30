@@ -6,6 +6,7 @@ import type { HistoryWaveform, SectionMarker } from "../../types";
 import { rangeAround } from "./playerController";
 import { usePlayer, usePlayerSnapshot } from "./PlayerContext";
 import { WaveformView } from "./WaveformView";
+import { loadWaveformOnce } from "./waveformRequest";
 
 export function InsightPlayer({
   audioUrl,
@@ -47,16 +48,23 @@ export function InsightPlayer({
     setWaveform(null);
     setWaveformError("");
     if (!historyId) return;
-    const controller = new AbortController();
-    void api.historyWaveform(historyId, controller.signal)
-      .then(setWaveform)
+    let active = true;
+    void loadWaveformOnce(
+      historyId,
+      () => api.historyWaveform(historyId),
+    )
+      .then((next) => {
+        if (active) setWaveform(next);
+      })
       .catch((cause: unknown) => {
-        if (isAbortError(cause)) return;
+        if (!active || isAbortError(cause)) return;
         setWaveformError(
           cause instanceof Error ? cause.message : "波形生成失败",
         );
       });
-    return () => controller.abort();
+    return () => {
+      active = false;
+    };
   }, [historyId]);
 
   const setSelection = (field: "start_s" | "end_s", value: number) => {

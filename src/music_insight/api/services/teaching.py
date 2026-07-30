@@ -417,13 +417,15 @@ async def answer_music_question(
         history_id,
         user_id=user_id,
     )
-    if (
-        map_record is None
-        or map_record.get("status") != TeachingGuideStatus.COMPLETE
-        or map_record.get("schema_version") != TEACHING_SCHEMA_VERSION
-        or map_record.get("source_result_hash") != source_hash
-        or map_record.get("map_payload") is None
-    ):
+    usable_map = (
+        map_record is not None
+        and map_record.get("status")
+        in {TeachingGuideStatus.COMPLETE, TeachingGuideStatus.PENDING}
+        and map_record.get("schema_version") == TEACHING_SCHEMA_VERSION
+        and map_record.get("source_result_hash") == source_hash
+        and map_record.get("map_payload") is not None
+    )
+    if not usable_map:
         guide = await generate_teaching_guide(
             history=history,
             repository=repository,

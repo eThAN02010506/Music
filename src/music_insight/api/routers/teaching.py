@@ -118,6 +118,17 @@ async def create_teaching_guide(
     settings: Settings = Depends(get_settings),
     user: UserPublic = Depends(get_current_user),
 ) -> TeachingGuideResponse:
+    options = payload or TeachingGuideGenerateRequest()
+    runtime_model: TeachingModelAdapter | None = None
+    if options.strategy == "evidence":
+        return await service.generate_teaching_guide(
+            history=history,
+            repository=repository,
+            history_id=history_id,
+            user_id=user.id,
+            force=options.force,
+            model=None,
+        )
     runtime = await resolve_teaching_runtime(
         request=request,
         history=history,
@@ -127,14 +138,15 @@ async def create_teaching_guide(
         model_override=model,
         relisten_override=None,
     )
+    runtime_model = runtime.model
     async with request.app.state.direct_work_limiter.lease(user.id):
         return await service.generate_teaching_guide(
             history=history,
             repository=repository,
             history_id=history_id,
             user_id=user.id,
-            force=payload.force if payload is not None else False,
-            model=runtime.model,
+            force=options.force,
+            model=runtime_model,
         )
 
 

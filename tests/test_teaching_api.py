@@ -14,6 +14,7 @@ from music_insight.api.contracts.teaching import TeachingChatRequest
 from music_insight.api.database import database_session
 from music_insight.api.history import HistoryStore
 from music_insight.api.dependencies import get_history_store
+from music_insight.api.routers import teaching as teaching_router
 from music_insight.api.services.teaching import (
     TEACHING_SCHEMA_VERSION,
     answer_music_question,
@@ -230,6 +231,69 @@ def test_authenticated_teaching_http_flow_uses_structured_message_shape(tmp_path
     } <= set(message.json()["response"])
 
 
+def test_evidence_guide_strategy_does_not_restore_network_model(
+    tmp_path,
+    monkeypatch,
+):
+    application = create_app()
+
+    async def fail_if_resolved(**_kwargs):
+        raise AssertionError("evidence strategy must not resolve a model")
+
+    monkeypatch.setattr(
+        teaching_router,
+        "resolve_teaching_runtime",
+        fail_if_resolved,
+    )
+    class ForbiddenLimiter:
+        def lease(self, _owner):
+            raise AssertionError(
+                "evidence strategy must not consume model/DSP capacity"
+            )
+
+    application.state.direct_work_limiter = ForbiddenLimiter()
+    with TestClient(application) as client:
+        registered = client.post(
+            "/auth/register",
+            json={"username": "evidence-teacher", "password": "safe password"},
+        )
+        assert registered.status_code == 201
+        user_id = registered.json()["id"]
+        history = get_history_store(get_settings())
+        audio = tmp_path / "evidence-song.wav"
+        audio.write_bytes(b"placeholder")
+        now = datetime.now(UTC)
+        history.create(
+            job_id="evidence-song",
+            title="Evidence Song",
+            file_name="evidence-song.wav",
+            language="en",
+            state="completed",
+            created_at=now,
+            updated_at=now,
+            audio_path=audio,
+            model_source="network",
+            model_location="http://192.168.1.97:8005",
+            user_id=user_id,
+        )
+        history.update(
+            "evidence-song",
+            state="completed",
+            updated_at=now,
+            result=_result(),
+            user_id=user_id,
+        )
+
+        response = client.post(
+            "/history/evidence-song/teaching-guide",
+            json={"strategy": "evidence"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "complete"
+    assert response.json()["understanding_map"]["events"]
+
+
 def test_guide_and_song_chat_persist_and_replay_idempotently(tmp_path):
     history, repository, user, _ = _stores(tmp_path)
 
@@ -303,6 +367,56 @@ def test_guide_and_song_chat_persist_and_replay_idempotently(tmp_path):
             user_id=user.id,
         )
     ) == 1
+
+
+def test_song_chat_uses_complete_map_while_model_enhancement_is_pending(
+    tmp_path,
+):
+    history, repository, user, _ = _stores(tmp_path)
+
+    async def exercise():
+        generated = await generate_teaching_guide(
+            history=history,
+            repository=repository,
+            history_id="song-1",
+            user_id=user.id,
+        )
+        pending, reserved = repository.mark_understanding_map_pending(
+            "song-1",
+            user_id=user.id,
+            schema_version=TEACHING_SCHEMA_VERSION,
+            source_result_hash=generated.source_result_hash,
+            force=True,
+        )
+        conversation = await create_conversation(
+            history=history,
+            repository=repository,
+            history_id="song-1",
+            user_id=user.id,
+            title="pending enhancement",
+        )
+        message = await answer_music_question(
+            history=history,
+            repository=repository,
+            history_id="song-1",
+            conversation_id=conversation.id,
+            user_id=user.id,
+            payload=TeachingChatRequest(
+                client_request_id="pending-map-chat-1",
+                message="这里发生了什么？",
+                current_time_s=10,
+                relisten_policy="never",
+            ),
+        )
+        return pending, reserved, message
+
+    pending, reserved, message = asyncio.run(exercise())
+
+    assert reserved is True
+    assert pending["status"] == "pending"
+    assert pending["map_payload"] is not None
+    assert message.status == "complete"
+    assert message.response is not None
 
 
 def test_song_chat_regenerates_a_guide_from_an_older_schema(tmp_path):

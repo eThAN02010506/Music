@@ -7,7 +7,10 @@ import type {
   MusicUnderstandingMap,
   TeachingChatRequest,
 } from "../../types";
-import { rangeAround } from "../player/playerController";
+import {
+  adjacentComparisonRanges,
+  rangeAround,
+} from "../player/playerController";
 import {
   usePlayer,
   usePlayerSnapshot,
@@ -54,6 +57,9 @@ export function ListeningChat({
   const [rangeMode, setRangeMode] = useState<ChatRangeMode>("current");
   const [updatingLevel, setUpdatingLevel] = useState(false);
   const [levelError, setLevelError] = useState("");
+  const [contextHint, setContextHint] = useState(
+    "未指定片段时，会以当前位置自动建立 15 秒范围。",
+  );
   const section = useMemo(
     () => currentSection(map, snapshot.currentTime),
     [map, snapshot.currentTime],
@@ -92,6 +98,38 @@ export function ListeningChat({
       "selection",
       { ...snapshot, selectedRange: selection },
     );
+  };
+
+  const selectQuestionRange = () => {
+    if (!snapshot.selectedRange) {
+      player.setRange(
+        "selection",
+        rangeAround(snapshot.currentTime, snapshot.duration, 15),
+      );
+      setContextHint("已自动选取当前位置附近 15 秒，可在播放器中继续调整。");
+    } else {
+      setContextHint("将携带播放器中已经框选的时间范围。");
+    }
+    setRangeMode("selection");
+  };
+
+  const selectComparison = () => {
+    if (!snapshot.rangeA || !snapshot.rangeB) {
+      const [rangeA, rangeB] = adjacentComparisonRanges(
+        snapshot.currentTime,
+        snapshot.duration,
+        15,
+      );
+      player.setRange("a", rangeA);
+      player.setRange("b", rangeB);
+      setContextHint("已自动建立相邻的 A/B 两段，可在播放器中重新框选并覆盖。");
+    } else {
+      setContextHint("将比较播放器中已经设置的 A/B 两段。");
+    }
+    setRangeMode("compare");
+    if (!question.trim()) {
+      setQuestion("请比较 A/B 两段的声音变化和表达作用。");
+    }
   };
 
   const submitForm = (event: FormEvent) => {
@@ -201,21 +239,14 @@ export function ListeningChat({
         </button>
         <button
           type="button"
-          disabled={!snapshot.selectedRange}
-          onClick={() => setRangeMode("selection")}
+          onClick={selectQuestionRange}
           className={rangeMode === "selection" ? "active" : ""}
         >
           询问框选片段
         </button>
         <button
           type="button"
-          disabled={!snapshot.rangeA || !snapshot.rangeB}
-          onClick={() => {
-            setRangeMode("compare");
-            if (!question.trim()) {
-              setQuestion("请比较 A/B 两段的声音变化和表达作用。");
-            }
-          }}
+          onClick={selectComparison}
           className={rangeMode === "compare" ? "active" : ""}
         >
           比较 A/B
@@ -228,6 +259,7 @@ export function ListeningChat({
           跟随当前位置
         </button>
       </div>
+      <p className="chat-context-hint" aria-live="polite">{contextHint}</p>
 
       <div
         className="chat-messages"

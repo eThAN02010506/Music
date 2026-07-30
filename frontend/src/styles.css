@@ -281,6 +281,10 @@ audio { width: min(520px, 100%); height: 34px; filter: invert(.88) hue-rotate(60
 .teaching-status strong { color: var(--warm); font-size: 11px; }
 .teaching-status p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
 .teaching-status button { margin: 0; flex: 0 0 auto; background: var(--warm); }
+.teaching-enhance { padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid var(--line); border-radius: 10px; background: rgba(13, 21, 18, .78); }
+.teaching-enhance span { color: var(--muted); font-size: 9px; }
+.teaching-enhance button { min-height: 32px; border: 1px solid #3a5540; border-radius: 8px; background: #142019; color: var(--accent); padding: 7px 10px; cursor: pointer; font-size: 9px; }
+.teaching-enhance button:disabled { opacity: .45; cursor: wait; }
 .teaching-overview { padding: 36px; }
 .teaching-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 30px; padding-bottom: 27px; border-bottom: 1px solid var(--line); }
 .teaching-hero h2 { margin: 0 0 12px; font-size: 34px; font-weight: 720; letter-spacing: -1px; }
@@ -357,6 +361,7 @@ audio { width: min(520px, 100%); height: 34px; filter: invert(.88) hue-rotate(60
 .conversation-toolbar .delete-conversation { color: #d89e93; }
 .chat-context-actions button.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
 .chat-context-actions button:disabled, .chat-send-error button:disabled { opacity: .35; cursor: not-allowed; }
+.chat-context-hint { margin: 8px 1px 0; color: #718078; font-size: 8px; line-height: 1.5; }
 .chat-messages { min-height: 210px; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 18px 2px; }
 .chat-empty { padding: 22px 10px; color: var(--muted); text-align: center; }
 .chat-empty strong { color: var(--ink); font-size: 11px; }
@@ -789,6 +794,7 @@ footer { width: min(1180px, calc(100% - 48px)); margin: 0 auto; border-top: 1px 
   .map-confidence { width: 100%; }
   .overall-atmosphere { grid-template-columns: 1fr; gap: 8px; }
   .teaching-status { align-items: stretch; flex-direction: column; }
+  .teaching-enhance { align-items: stretch; flex-direction: column; }
   .teaching-evidence-list li { grid-template-columns: auto auto 1fr; }
   .teaching-evidence-list li > small { grid-column: 3; }
   .listening-chat { min-height: 520px; padding: 17px; }

@@ -353,6 +353,8 @@ export interface TeachingGuideResponse {
   updated_at: string | null;
 }
 
+export type TeachingGuideStrategy = "evidence" | "model";
+
 export interface TeachingConversation {
   id: string;
   analysis_id: string;

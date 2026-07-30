@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -26,6 +26,7 @@ class TeachingGuideStatus(StrEnum):
 
 class TeachingGuideGenerateRequest(TeachingModel):
     force: bool = False
+    strategy: Literal["evidence", "model"] = "model"
 
 
 class TeachingGuideResponse(TeachingModel):

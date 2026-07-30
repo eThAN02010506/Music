@@ -18,6 +18,7 @@ import type {
   TeachingChatRequest,
   TeachingConversation,
   TeachingGuideResponse,
+  TeachingGuideStrategy,
   TeachingMessage,
   User,
 } from "./types";
@@ -191,13 +192,22 @@ export const api = {
       undefined,
       { signal },
     ),
-  generateTeachingGuide: (id: string, force = false) =>
+  generateTeachingGuide: (
+    id: string,
+    options: {
+      force?: boolean;
+      strategy?: TeachingGuideStrategy;
+    } = {},
+  ) =>
     request<TeachingGuideResponse>(
       `/history/${encodeURIComponent(id)}/teaching-guide`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ force }),
+        body: JSON.stringify({
+          force: options.force ?? false,
+          strategy: options.strategy ?? "model",
+        }),
       },
     ),
   teachingConversations: (id: string, signal?: AbortSignal) =>

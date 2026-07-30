@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  adjacentComparisonRanges,
   clampTime,
   normalizeRange,
   rangeAround,
@@ -29,6 +30,21 @@ test("rangeAround keeps a fifteen-second task inside the media duration", () => 
   assert.deepEqual(rangeAround(2, 100), { start_s: 0, end_s: 15 });
   assert.deepEqual(rangeAround(98, 100), { start_s: 85, end_s: 100 });
   assert.deepEqual(rangeAround(5, 8), { start_s: 0, end_s: 8 });
+});
+
+test("adjacent comparison ranges stay distinct and inside the track", () => {
+  assert.deepEqual(adjacentComparisonRanges(0, 100), [
+    { start_s: 0, end_s: 15 },
+    { start_s: 15, end_s: 30 },
+  ]);
+  assert.deepEqual(adjacentComparisonRanges(98, 100), [
+    { start_s: 70, end_s: 85 },
+    { start_s: 85, end_s: 100 },
+  ]);
+  assert.deepEqual(adjacentComparisonRanges(4, 8), [
+    { start_s: 0, end_s: 4 },
+    { start_s: 4, end_s: 8 },
+  ]);
 });
 
 test("model-provided player actions are clamped and invalid ranges rejected", () => {
