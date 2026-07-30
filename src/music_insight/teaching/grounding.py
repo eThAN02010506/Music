@@ -6,13 +6,16 @@ import json
 
 from music_insight.schemas import AnalysisResult, Evidence, EvidenceType
 from music_insight.teaching.models import (
+    AnswerEvidence,
     AudioDimension,
     EvidenceClaimType,
     EvidenceSourceType,
+    LyricsContext,
     MusicUnderstandingMap,
     TeachingChatContext,
     TeachingChatResponse,
     TeachingTimeSpan,
+    UnderstandingEvent,
 )
 
 
@@ -170,6 +173,42 @@ def validate_understanding_map(
     issues: list[str] = []
     for section in understanding_map.sections:
         _check_duration(section.span, duration_s, f"section {section.id}", issues)
+    _validate_emotional_arc(
+        understanding_map,
+        catalog=catalog,
+        duration_s=duration_s,
+        issues=issues,
+    )
+    for event in understanding_map.events:
+        _validate_understanding_event(
+            event,
+            catalog=catalog,
+            duration_s=duration_s,
+            issues=issues,
+        )
+    _validate_key_moments(
+        understanding_map,
+        duration_s=duration_s,
+        issues=issues,
+    )
+    has_map_support = any(
+        point.evidence_refs for point in understanding_map.emotional_arc
+    ) or any(event.audio_evidence for event in understanding_map.events)
+    if not has_map_support and understanding_map.confidence > 0.4:
+        issues.append(
+            "high-confidence map overview has no traceable event or arc evidence"
+        )
+    if issues:
+        raise GroundingError(issues)
+
+
+def _validate_emotional_arc(
+    understanding_map: MusicUnderstandingMap,
+    *,
+    catalog: dict[str, SourceFact],
+    duration_s: float,
+    issues: list[str],
+) -> None:
     for point_index, point in enumerate(understanding_map.emotional_arc):
         _check_duration(
             point.span,
@@ -191,51 +230,81 @@ def validate_understanding_map(
                 f"emotional_arc[{point_index}]",
                 issues,
             )
-    for event in understanding_map.events:
-        event_span = event.span
-        _check_duration(event_span, duration_s, f"event {event.id}", issues)
-        timed_support = False
-        direct_timed_support = False
-        for reference in event.audio_evidence:
-            fact = _check_analysis_reference(
-                reference.source_id,
-                reference.source_type,
-                reference.statement,
-                reference.claim_type,
-                reference.span,
-                catalog,
-                event_span,
-                f"event {event.id}",
-                issues,
-            )
-            if fact is not None and fact.span is not None:
-                timed_support = True
-                if fact.claim_type in {
-                    EvidenceClaimType.OBSERVED_FACT,
-                    EvidenceClaimType.COMPUTED_FACT,
-                }:
-                    direct_timed_support = True
-        if not timed_support:
-            issues.append(f"event {event.id} has no time-bounded source")
-        elif not direct_timed_support:
-            issues.append(
-                f"event {event.id} has no directly observed or computed source"
-            )
-        for lyric in event.lyrics_context:
-            fact = catalog.get(lyric.source_id)
-            if fact is None or fact.source_type != EvidenceSourceType.LYRICS:
-                issues.append(
-                    f"event {event.id} references unknown lyric {lyric.source_id}"
-                )
-                continue
-            if lyric.text != fact.statement:
-                issues.append(
-                    f"event {event.id} changes sourced lyric {lyric.source_id}"
-                )
-            if fact.span is not None and not fact.span.overlaps(event_span, tolerance=0.5):
-                issues.append(
-                    f"event {event.id} lyric {lyric.source_id} is outside its range"
-                )
+
+
+def _validate_understanding_event(
+    event: UnderstandingEvent,
+    *,
+    catalog: dict[str, SourceFact],
+    duration_s: float,
+    issues: list[str],
+) -> None:
+    event_span = event.span
+    _check_duration(event_span, duration_s, f"event {event.id}", issues)
+    timed_support = False
+    direct_timed_support = False
+    for reference in event.audio_evidence:
+        fact = _check_analysis_reference(
+            reference.source_id,
+            reference.source_type,
+            reference.statement,
+            reference.claim_type,
+            reference.span,
+            catalog,
+            event_span,
+            f"event {event.id}",
+            issues,
+        )
+        if fact is not None and fact.span is not None:
+            timed_support = True
+            if fact.claim_type in {
+                EvidenceClaimType.OBSERVED_FACT,
+                EvidenceClaimType.COMPUTED_FACT,
+            }:
+                direct_timed_support = True
+    if not timed_support:
+        issues.append(f"event {event.id} has no time-bounded source")
+    elif not direct_timed_support:
+        issues.append(
+            f"event {event.id} has no directly observed or computed source"
+        )
+    for lyric in event.lyrics_context:
+        _validate_event_lyric(
+            event_id=event.id,
+            event_span=event_span,
+            lyric=lyric,
+            catalog=catalog,
+            issues=issues,
+        )
+
+
+def _validate_event_lyric(
+    *,
+    event_id: str,
+    event_span: TeachingTimeSpan,
+    lyric: LyricsContext,
+    catalog: dict[str, SourceFact],
+    issues: list[str],
+) -> None:
+    fact = catalog.get(lyric.source_id)
+    if fact is None or fact.source_type != EvidenceSourceType.LYRICS:
+        issues.append(f"event {event_id} references unknown lyric {lyric.source_id}")
+        return
+    if lyric.text != fact.statement:
+        issues.append(f"event {event_id} changes sourced lyric {lyric.source_id}")
+    if fact.span is not None and not fact.span.overlaps(
+        event_span,
+        tolerance=0.5,
+    ):
+        issues.append(f"event {event_id} lyric {lyric.source_id} is outside its range")
+
+
+def _validate_key_moments(
+    understanding_map: MusicUnderstandingMap,
+    *,
+    duration_s: float,
+    issues: list[str],
+) -> None:
     event_by_id = {event.id: event for event in understanding_map.events}
     for moment in understanding_map.key_moments:
         moment_span = TeachingTimeSpan(
@@ -248,15 +317,6 @@ def validate_understanding_map(
             issues.append(
                 f"key moment {moment.id} does not overlap event {moment.event_id}"
             )
-    has_map_support = any(
-        point.evidence_refs for point in understanding_map.emotional_arc
-    ) or any(event.audio_evidence for event in understanding_map.events)
-    if not has_map_support and understanding_map.confidence > 0.4:
-        issues.append(
-            "high-confidence map overview has no traceable event or arc evidence"
-        )
-    if issues:
-        raise GroundingError(issues)
 
 
 def validate_chat_response(
@@ -264,8 +324,36 @@ def validate_chat_response(
     *,
     context: TeachingChatContext,
 ) -> None:
-    analysis_sources = analysis_source_catalog_from_context(context)
-    sources: dict[str, SourceFact] = dict(analysis_sources)
+    sources = _chat_source_catalog(context)
+    ranges = {item.id: item.span for item in response.time_ranges}
+    issues: list[str] = []
+    for range_id, span in ranges.items():
+        _check_duration(span, context.duration_s, f"time range {range_id}", issues)
+    if not response.insufficient_evidence and not response.evidence:
+        issues.append("normal answer has no evidence")
+    if response.insufficient_evidence and response.confidence > 0.4:
+        issues.append("insufficient-evidence answer confidence exceeds 0.4")
+    for evidence in response.evidence:
+        _validate_chat_evidence(
+            evidence,
+            ranges=ranges,
+            sources=sources,
+            issues=issues,
+        )
+    if response.relistened and not context.relisten_evidence:
+        issues.append("answer claims a relisten without relisten evidence")
+    if any(
+        source_id.startswith("relisten:")
+        for evidence in response.evidence
+        for source_id in evidence.source_refs
+    ) and not response.relistened:
+        issues.append("answer cites relisten evidence but relistened is false")
+    if issues:
+        raise GroundingError(issues)
+
+
+def _chat_source_catalog(context: TeachingChatContext) -> dict[str, SourceFact]:
+    sources = analysis_source_catalog_from_context(context)
     sources.update(
         {
             f"understanding_event:{event.id}": SourceFact(
@@ -298,78 +386,78 @@ def validate_chat_response(
             for evidence in context.relisten_evidence
         }
     )
-    ranges = {item.id: item.span for item in response.time_ranges}
-    issues: list[str] = []
-    for range_id, span in ranges.items():
-        _check_duration(span, context.duration_s, f"time range {range_id}", issues)
-    if not response.insufficient_evidence and not response.evidence:
-        issues.append("normal answer has no evidence")
-    if response.insufficient_evidence and response.confidence > 0.4:
-        issues.append("insufficient-evidence answer confidence exceeds 0.4")
-    for evidence in response.evidence:
-        referenced_ranges = [
-            ranges[range_id]
-            for range_id in evidence.time_range_ids
-            if range_id in ranges
-        ]
-        for source_id in evidence.source_refs:
-            fact = sources.get(source_id)
-            if fact is None:
-                issues.append(
-                    f"answer evidence {evidence.id} uses unknown source {source_id}"
-                )
-                continue
-            source_span = fact.span
-            source_claim_type = fact.claim_type
-            if (
-                evidence.claim_type
-                in {
-                    EvidenceClaimType.OBSERVED_FACT,
-                    EvidenceClaimType.COMPUTED_FACT,
-                }
-                and source_claim_type != evidence.claim_type
-            ):
-                issues.append(
-                    f"answer evidence {evidence.id} changes the epistemic "
-                    f"type of {source_id}"
-                )
-            if evidence.claim_type in {
-                EvidenceClaimType.OBSERVED_FACT,
-                EvidenceClaimType.COMPUTED_FACT,
-            }:
-                if len(evidence.source_refs) != 1:
-                    issues.append(
-                        f"answer evidence {evidence.id} combines direct facts; "
-                        "each observed/computed fact must use one source"
-                    )
-                if evidence.statement.strip() != fact.statement.strip():
-                    issues.append(
-                        f"answer evidence {evidence.id} changes the sourced "
-                        f"statement for {source_id}"
-                    )
-                if evidence.dimension != fact.dimension:
-                    issues.append(
-                        f"answer evidence {evidence.id} changes the source "
-                        f"dimension for {source_id}"
-                    )
-            if source_span is not None and not any(
-                source_span.overlaps(span, tolerance=0.75)
-                for span in referenced_ranges
-            ):
-                issues.append(
-                    f"answer evidence {evidence.id} source {source_id} "
-                    "does not overlap its cited time"
-                )
-    if response.relistened and not context.relisten_evidence:
-        issues.append("answer claims a relisten without relisten evidence")
-    if any(
-        source_id.startswith("relisten:")
-        for evidence in response.evidence
-        for source_id in evidence.source_refs
-    ) and not response.relistened:
-        issues.append("answer cites relisten evidence but relistened is false")
-    if issues:
-        raise GroundingError(issues)
+    return sources
+
+
+def _validate_chat_evidence(
+    evidence: AnswerEvidence,
+    *,
+    ranges: dict[str, TeachingTimeSpan],
+    sources: dict[str, SourceFact],
+    issues: list[str],
+) -> None:
+    referenced_ranges = [
+        ranges[range_id]
+        for range_id in evidence.time_range_ids
+        if range_id in ranges
+    ]
+    for source_id in evidence.source_refs:
+        fact = sources.get(source_id)
+        if fact is None:
+            issues.append(
+                f"answer evidence {evidence.id} uses unknown source {source_id}"
+            )
+            continue
+        _validate_chat_evidence_source(
+            evidence,
+            source_id=source_id,
+            fact=fact,
+            referenced_ranges=referenced_ranges,
+            issues=issues,
+        )
+
+
+def _validate_chat_evidence_source(
+    evidence: AnswerEvidence,
+    *,
+    source_id: str,
+    fact: SourceFact,
+    referenced_ranges: list[TeachingTimeSpan],
+    issues: list[str],
+) -> None:
+    direct_claim = evidence.claim_type in {
+        EvidenceClaimType.OBSERVED_FACT,
+        EvidenceClaimType.COMPUTED_FACT,
+    }
+    if direct_claim and fact.claim_type != evidence.claim_type:
+        issues.append(
+            f"answer evidence {evidence.id} changes the epistemic "
+            f"type of {source_id}"
+        )
+    if direct_claim:
+        if len(evidence.source_refs) != 1:
+            issues.append(
+                f"answer evidence {evidence.id} combines direct facts; "
+                "each observed/computed fact must use one source"
+            )
+        if evidence.statement.strip() != fact.statement.strip():
+            issues.append(
+                f"answer evidence {evidence.id} changes the sourced "
+                f"statement for {source_id}"
+            )
+        if evidence.dimension != fact.dimension:
+            issues.append(
+                f"answer evidence {evidence.id} changes the source "
+                f"dimension for {source_id}"
+            )
+    if fact.span is not None and not any(
+        fact.span.overlaps(span, tolerance=0.75)
+        for span in referenced_ranges
+    ):
+        issues.append(
+            f"answer evidence {evidence.id} source {source_id} "
+            "does not overlap its cited time"
+        )
 
 
 def analysis_source_catalog_from_context(

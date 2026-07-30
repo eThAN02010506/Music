@@ -34,6 +34,7 @@ class AsrVerificationHttpError(RuntimeError):
 
 
 AsrVerifierDialect: TypeAlias = Literal["openai_whisper", "crisp_asr"]
+ParsedSegment: TypeAlias = tuple[LyricsSegment, float | None, float | None]
 
 
 class OpenAIAsrVerifier(AsrVerifier):
@@ -83,6 +84,33 @@ class OpenAIAsrVerifier(AsrVerifier):
         )
 
     async def _transcribe(self, asset: AudioAsset) -> dict[str, Any]:
+        data, headers, timeout = self._transcription_request_options(asset)
+        url = f"{self.endpoint}{self.transcriptions_path}"
+        async with httpx.AsyncClient(
+            trust_env=False,
+            transport=self.transport,
+            limits=httpx.Limits(
+                max_connections=1,
+                max_keepalive_connections=1,
+            ),
+        ) as client:
+            status_code, response_body = await self._send_transcription(
+                client,
+                asset=asset,
+                url=url,
+                data=data,
+                headers=headers,
+                timeout=timeout,
+            )
+        return self._decode_transcription_response(
+            status_code,
+            response_body,
+        )
+
+    def _transcription_request_options(
+        self,
+        asset: AudioAsset,
+    ) -> tuple[dict[str, str], dict[str, str] | None, httpx.Timeout]:
         data: dict[str, str] = {
             "response_format": "verbose_json",
             "temperature": "0",
@@ -114,50 +142,59 @@ class OpenAIAsrVerifier(AsrVerifier):
             write=min(120.0, self.timeout_seconds),
             pool=min(10.0, self.timeout_seconds),
         )
-        url = f"{self.endpoint}{self.transcriptions_path}"
-        async with httpx.AsyncClient(
-            trust_env=False,
-            transport=self.transport,
-            limits=httpx.Limits(
-                max_connections=1,
-                max_keepalive_connections=1,
-            ),
-        ) as client:
-            status_code: int | None = None
-            response_body: bytes | None = None
-            for attempt in range(2):
-                try:
-                    with asset.path.open("rb") as audio:
-                        async with client.stream(
-                            "POST",
-                            url,
-                            data=data,
-                            files={
-                                "file": (
-                                    asset.path.name,
-                                    audio,
-                                    asset.media_type or "audio/wav",
-                                )
-                            },
-                            headers=headers,
-                            timeout=timeout,
-                        ) as response:
-                            status_code = response.status_code
-                            response_body = await self._read_bounded(response)
-                except (
-                    httpx.ConnectError,
-                    httpx.ConnectTimeout,
-                    httpx.ReadError,
-                    httpx.RemoteProtocolError,
-                ):
-                    if attempt:
-                        raise
-                    await asyncio.sleep(0.25)
-                    continue
-                if status_code not in {429, 502, 503, 504} or attempt:
-                    break
-                await asyncio.sleep(0.25)
+        return data, headers, timeout
 
+    async def _send_transcription(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        asset: AudioAsset,
+        url: str,
+        data: dict[str, str],
+        headers: dict[str, str] | None,
+        timeout: httpx.Timeout,
+    ) -> tuple[int | None, bytes | None]:
+        status_code: int | None = None
+        response_body: bytes | None = None
+        for attempt in range(2):
+            try:
+                with asset.path.open("rb") as audio:
+                    async with client.stream(
+                        "POST",
+                        url,
+                        data=data,
+                        files={
+                            "file": (
+                                asset.path.name,
+                                audio,
+                                asset.media_type or "audio/wav",
+                            )
+                        },
+                        headers=headers,
+                        timeout=timeout,
+                    ) as response:
+                        status_code = response.status_code
+                        response_body = await self._read_bounded(response)
+            except (
+                httpx.ConnectError,
+                httpx.ConnectTimeout,
+                httpx.ReadError,
+                httpx.RemoteProtocolError,
+            ):
+                if attempt:
+                    raise
+                await asyncio.sleep(0.25)
+                continue
+            if status_code not in {429, 502, 503, 504} or attempt:
+                break
+            await asyncio.sleep(0.25)
+        return status_code, response_body
+
+    def _decode_transcription_response(
+        self,
+        status_code: int | None,
+        response_body: bytes | None,
+    ) -> dict[str, Any]:
         if status_code is None or response_body is None:
             raise RuntimeError(f"{self.source} 未返回响应。")
         if status_code >= 400:
@@ -206,123 +243,28 @@ class OpenAIAsrVerifier(AsrVerifier):
         duration_s: float | None,
         language_hint: str | None,
     ) -> AsrVerificationResult:
-        raw_text_value = payload.get("text")
-        if "text" not in payload or not isinstance(raw_text_value, str):
-            raise AsrVerificationProtocolError(
-                "ASR 验证响应缺少字符串 text 字段。"
-            )
-        raw_text = raw_text_value.strip()
-        raw_segments = payload.get("segments")
-        if "segments" not in payload or not isinstance(raw_segments, list):
-            raise AsrVerificationProtocolError(
-                "ASR 验证响应中的 segments 必须是数组。"
-            )
-        if len(raw_segments) > self.MAX_SEGMENTS:
-            raise AsrVerificationProtocolError(
-                f"ASR 验证响应包含过多时间片段（>{self.MAX_SEGMENTS}）。"
-            )
-
-        segments: list[LyricsSegment] = []
-        no_speech_probabilities: list[float] = []
-        confidence_values: list[float] = []
-        invalid_segments = 0
-        for item in raw_segments:
-            if not isinstance(item, dict):
-                invalid_segments += 1
-                continue
-            text_value = item.get("text")
-            text = text_value.strip() if isinstance(text_value, str) else ""
-            if not text:
-                invalid_segments += 1
-                continue
-            start = self._finite_number(
-                item.get("start", item.get("start_s", item.get("start_time")))
-            )
-            end = self._finite_number(
-                item.get("end", item.get("end_s", item.get("end_time")))
-            )
-            if (
-                start is None
-                or end is None
-                or start < 0
-                or end <= start
-                or (
-                    duration_s is not None
-                    and start > duration_s + 1.0
-                )
-            ):
-                invalid_segments += 1
-                continue
-            if duration_s is not None:
-                end = min(end, duration_s)
-            if end <= start:
-                invalid_segments += 1
-                continue
-
-            no_speech_probability = self._probability(
-                item.get("no_speech_prob")
-            )
-            if no_speech_probability is not None:
-                no_speech_probabilities.append(no_speech_probability)
-            segment_confidence = self._segment_confidence(
-                item,
-                no_speech_probability=no_speech_probability,
-            )
-            if segment_confidence is not None:
-                confidence_values.append(segment_confidence)
-            segments.append(
-                LyricsSegment(
-                    text=text[: self.MAX_SEGMENT_TEXT],
-                    span=TimeSpan(start_s=start, end_s=end),
-                    language=(
-                        str(item.get("language")).strip()
-                        if item.get("language")
-                        else language_hint
-                    ),
-                    confidence=segment_confidence,
-                )
-            )
-
-        if raw_text and not segments:
-            raise AsrVerificationProtocolError(
-                "ASR 返回了文本但没有可验证的时间片段。"
-            )
-        if raw_segments and invalid_segments == len(raw_segments) and not raw_text:
-            raise AsrVerificationProtocolError(
-                "ASR 返回的时间片段全部无效。"
-            )
-
-        top_level_no_speech = self._top_level_no_speech_probability(payload)
-        vocal_confidence: float | None = None
-        if segments:
-            if (
-                len(no_speech_probabilities) == len(segments)
-                and min(no_speech_probabilities) >= 0.8
-            ):
-                vocals_detected: bool | None = False
-                vocal_confidence = (
-                    sum(no_speech_probabilities)
-                    / len(no_speech_probabilities)
-                )
-            elif not no_speech_probabilities or min(no_speech_probabilities) <= 0.6:
-                vocals_detected = True
-                if len(no_speech_probabilities) == len(segments):
-                    vocal_confidence = (
-                        sum(1.0 - value for value in no_speech_probabilities)
-                        / len(no_speech_probabilities)
-                    )
-            else:
-                vocals_detected = None
-        else:
-            if (
-                top_level_no_speech is not None
-                and top_level_no_speech >= 0.8
-            ):
-                vocals_detected = False
-                vocal_confidence = top_level_no_speech
-            else:
-                vocals_detected = None
-
+        raw_text, raw_segments = self._validated_transcript_fields(payload)
+        (
+            segments,
+            no_speech_probabilities,
+            confidence_values,
+            invalid_segments,
+        ) = self._parse_segments(
+            raw_segments,
+            duration_s=duration_s,
+            language_hint=language_hint,
+        )
+        self._validate_parsed_segments(
+            raw_text=raw_text,
+            raw_segments=raw_segments,
+            segments=segments,
+            invalid_segments=invalid_segments,
+        )
+        vocals_detected, vocal_confidence = self._vocal_presence(
+            segments,
+            no_speech_probabilities,
+            top_level_no_speech=self._top_level_no_speech_probability(payload),
+        )
         response_duration = self._finite_number(payload.get("duration"))
         observed_duration = (
             duration_s if duration_s is not None else response_duration
@@ -363,6 +305,159 @@ class OpenAIAsrVerifier(AsrVerifier):
                 )
             ],
         )
+
+    def _validated_transcript_fields(
+        self,
+        payload: dict[str, Any],
+    ) -> tuple[str, list[Any]]:
+        raw_text_value = payload.get("text")
+        if "text" not in payload or not isinstance(raw_text_value, str):
+            raise AsrVerificationProtocolError(
+                "ASR 验证响应缺少字符串 text 字段。"
+            )
+        raw_segments = payload.get("segments")
+        if "segments" not in payload or not isinstance(raw_segments, list):
+            raise AsrVerificationProtocolError(
+                "ASR 验证响应中的 segments 必须是数组。"
+            )
+        if len(raw_segments) > self.MAX_SEGMENTS:
+            raise AsrVerificationProtocolError(
+                f"ASR 验证响应包含过多时间片段（>{self.MAX_SEGMENTS}）。"
+            )
+        return raw_text_value.strip(), raw_segments
+
+    def _parse_segments(
+        self,
+        raw_segments: list[Any],
+        *,
+        duration_s: float | None,
+        language_hint: str | None,
+    ) -> tuple[list[LyricsSegment], list[float], list[float], int]:
+        segments: list[LyricsSegment] = []
+        no_speech_probabilities: list[float] = []
+        confidence_values: list[float] = []
+        invalid_segments = 0
+        for item in raw_segments:
+            parsed = self._parse_segment(
+                item,
+                duration_s=duration_s,
+                language_hint=language_hint,
+            )
+            if parsed is None:
+                invalid_segments += 1
+                continue
+            segment, no_speech_probability, segment_confidence = parsed
+            if no_speech_probability is not None:
+                no_speech_probabilities.append(no_speech_probability)
+            if segment_confidence is not None:
+                confidence_values.append(segment_confidence)
+            segments.append(segment)
+        return (
+            segments,
+            no_speech_probabilities,
+            confidence_values,
+            invalid_segments,
+        )
+
+    def _parse_segment(
+        self,
+        item: Any,
+        *,
+        duration_s: float | None,
+        language_hint: str | None,
+    ) -> ParsedSegment | None:
+        if not isinstance(item, dict):
+            return None
+        text_value = item.get("text")
+        text = text_value.strip() if isinstance(text_value, str) else ""
+        if not text:
+            return None
+        start = self._finite_number(
+            item.get("start", item.get("start_s", item.get("start_time")))
+        )
+        end = self._finite_number(
+            item.get("end", item.get("end_s", item.get("end_time")))
+        )
+        if (
+            start is None
+            or end is None
+            or start < 0
+            or end <= start
+            or (duration_s is not None and start > duration_s + 1.0)
+        ):
+            return None
+        if duration_s is not None:
+            end = min(end, duration_s)
+        if end <= start:
+            return None
+        no_speech_probability = self._probability(item.get("no_speech_prob"))
+        segment_confidence = self._segment_confidence(
+            item,
+            no_speech_probability=no_speech_probability,
+        )
+        segment = LyricsSegment(
+            text=text[: self.MAX_SEGMENT_TEXT],
+            span=TimeSpan(start_s=start, end_s=end),
+            language=(
+                str(item.get("language")).strip()
+                if item.get("language")
+                else language_hint
+            ),
+            confidence=segment_confidence,
+        )
+        return segment, no_speech_probability, segment_confidence
+
+    @staticmethod
+    def _validate_parsed_segments(
+        *,
+        raw_text: str,
+        raw_segments: list[Any],
+        segments: list[LyricsSegment],
+        invalid_segments: int,
+    ) -> None:
+        if raw_text and not segments:
+            raise AsrVerificationProtocolError(
+                "ASR 返回了文本但没有可验证的时间片段。"
+            )
+        if raw_segments and invalid_segments == len(raw_segments) and not raw_text:
+            raise AsrVerificationProtocolError(
+                "ASR 返回的时间片段全部无效。"
+            )
+
+    @staticmethod
+    def _vocal_presence(
+        segments: list[LyricsSegment],
+        no_speech_probabilities: list[float],
+        *,
+        top_level_no_speech: float | None,
+    ) -> tuple[bool | None, float | None]:
+        vocal_confidence: float | None = None
+        if segments:
+            if (
+                len(no_speech_probabilities) == len(segments)
+                and min(no_speech_probabilities) >= 0.8
+            ):
+                vocals_detected: bool | None = False
+                vocal_confidence = (
+                    sum(no_speech_probabilities)
+                    / len(no_speech_probabilities)
+                )
+            elif not no_speech_probabilities or min(no_speech_probabilities) <= 0.6:
+                vocals_detected = True
+                if len(no_speech_probabilities) == len(segments):
+                    vocal_confidence = (
+                        sum(1.0 - value for value in no_speech_probabilities)
+                        / len(no_speech_probabilities)
+                    )
+            else:
+                vocals_detected = None
+        else:
+            if top_level_no_speech is not None and top_level_no_speech >= 0.8:
+                vocals_detected = False
+                vocal_confidence = top_level_no_speech
+            else:
+                vocals_detected = None
+        return vocals_detected, vocal_confidence
 
     @classmethod
     def _segment_confidence(

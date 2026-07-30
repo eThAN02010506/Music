@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from pathlib import Path
 import time
 from uuid import uuid4
@@ -24,7 +25,7 @@ from music_insight.config import Settings
 from music_insight.distributed.payloads import DistributedAnalysisPayload
 from music_insight.pipeline.orchestrator import AnalysisOrchestrator
 from music_insight.reporting.markdown import render_markdown_report
-from music_insight.schemas import AnalysisResult
+from music_insight.schemas import AnalysisResult, AudioAsset
 
 from .uploads import save_audio_upload
 
@@ -68,14 +69,7 @@ async def submit_analysis_job(
     registrations succeed; any failure cancels/removes the job and upload.
     """
 
-    try:
-        await ensure_capacity(jobs, user_id)
-    except JobCapacityError as exc:
-        raise HTTPException(
-            status_code=503 if exc.global_limit else 429,
-            detail=str(exc),
-        ) from exc
-
+    await _ensure_submission_capacity(jobs, user_id)
     file_name = file.filename or "audio"
     asset = await save_audio_upload(file, language, settings, user_id)
     if not is_memory_store(jobs):
@@ -92,25 +86,46 @@ async def submit_analysis_job(
             user_id=user_id,
             task_queue=task_queue,
         )
+    return await _submit_memory_analysis_job(
+        asset=asset,
+        file_name=file_name,
+        language=language,
+        model_source=model_source,
+        model_endpoint=model_endpoint,
+        local_model_path=local_model_path,
+        settings=settings,
+        history=history,
+        jobs=jobs,
+        user_id=user_id,
+        orchestrator=orchestrator,
+    )
 
-    ready = asyncio.Event()
-    snapshot: JobSnapshot | None = None
-    last_persisted_stage: str | None = None
-    last_persisted_progress = -1.0
-    last_persisted_at = 0.0
 
-    async def work(update):
-        await ready.wait()
-        return await orchestrator.analyze(asset, progress=update)
+async def _ensure_submission_capacity(jobs, user_id: str) -> None:
+    try:
+        await ensure_capacity(jobs, user_id)
+    except JobCapacityError as exc:
+        raise HTTPException(
+            status_code=503 if exc.global_limit else 429,
+            detail=str(exc),
+        ) from exc
 
-    async def observe(
+
+@dataclass(slots=True)
+class _HistoryProgressObserver:
+    ready: asyncio.Event
+    history: HistoryStore
+    user_id: str
+    last_stage: str | None = None
+    last_progress: float = -1.0
+    last_persisted_at: float = 0.0
+
+    async def __call__(
+        self,
         current: JobSnapshot,
         result: AnalysisResult | None,
     ) -> None:
-        nonlocal last_persisted_at
-        nonlocal last_persisted_progress
-        nonlocal last_persisted_stage
-        if not ready.is_set():
+        if not self.ready.is_set():
             return
         now = time.monotonic()
         terminal = current.state in {
@@ -120,51 +135,65 @@ async def submit_analysis_job(
         }
         should_persist = (
             terminal
-            or current.stage != last_persisted_stage
-            or current.progress - last_persisted_progress >= 0.05
-            or now - last_persisted_at >= 2
+            or current.stage != self.last_stage
+            or current.progress - self.last_progress >= 0.05
+            or now - self.last_persisted_at >= 2
         )
         if not should_persist:
             return
         await run_in_threadpool(
-            history.update,
+            self.history.update,
             current.id,
             state=current.state.value,
             updated_at=current.updated_at,
             result=result if current.state == JobState.COMPLETED else None,
             error=current.error,
-            user_id=user_id,
+            user_id=self.user_id,
         )
-        last_persisted_stage = current.stage
-        last_persisted_progress = current.progress
-        last_persisted_at = now
+        self.last_stage = current.stage
+        self.last_progress = current.progress
+        self.last_persisted_at = now
+
+
+async def _submit_memory_analysis_job(
+    *,
+    asset: AudioAsset,
+    file_name: str,
+    language: str | None,
+    model_source: str,
+    model_endpoint: str | None,
+    local_model_path: str | None,
+    settings: Settings,
+    history: HistoryStore,
+    jobs,
+    user_id: str,
+    orchestrator: AnalysisOrchestrator,
+) -> JobSnapshot:
+    ready = asyncio.Event()
+    snapshot: JobSnapshot | None = None
+
+    async def work(update):
+        await ready.wait()
+        return await orchestrator.analyze(asset, progress=update)
 
     creation_task: asyncio.Task | None = None
     try:
         snapshot = jobs.create(
             work,
-            observer=observe,
+            observer=_HistoryProgressObserver(ready, history, user_id),
             owner_user_id=user_id,
         )
-        creation_task = asyncio.create_task(
-            run_in_threadpool(
-                history.create,
-                job_id=snapshot.id,
-                title=Path(file_name).stem,
-                file_name=file_name,
-                language=language,
-                state=snapshot.state.value,
-                created_at=snapshot.created_at,
-                updated_at=snapshot.updated_at,
-                audio_path=asset.path,
-                model_source=model_source,
-                model_location=(
-                    local_model_path
-                    if model_source == "local"
-                    else (model_endpoint or settings.omni_endpoint)
-                ),
-                user_id=user_id,
-            ),
+        creation_task = _create_history_task(
+            history,
+            snapshot=snapshot,
+            asset_path=asset.path,
+            file_name=file_name,
+            language=language,
+            model_source=model_source,
+            model_endpoint=model_endpoint,
+            local_model_path=local_model_path,
+            settings=settings,
+            user_id=user_id,
         )
         await asyncio.shield(creation_task)
     except BaseException as exc:
@@ -176,56 +205,110 @@ async def submit_analysis_job(
                 await _settle_despite_cancellation(creation_task)
             except BaseException:
                 pass
-
-        async def compensate() -> None:
-            try:
-                if snapshot is None:
-                    return
-                try:
-                    await jobs.cancel_and_wait(
-                        snapshot.id,
-                        owner_user_id=user_id,
-                    )
-                except Exception:
-                    pass
-                try:
-                    await run_in_threadpool(
-                        history.delete,
-                        snapshot.id,
-                        user_id=user_id,
-                    )
-                except Exception:
-                    # Preserve the triggering exception. Any partial row stays
-                    # owner-scoped and startup recovery marks it interrupted.
-                    pass
-                jobs.remove(snapshot.id, owner_user_id=user_id)
-            finally:
-                try:
-                    asset.path.unlink(missing_ok=True)
-                except OSError:
-                    pass
-
-        cleanup_task = asyncio.create_task(compensate())
+        cleanup_task = asyncio.create_task(
+            _compensate_memory_submission(
+                snapshot=snapshot,
+                asset_path=asset.path,
+                history=history,
+                jobs=jobs,
+                user_id=user_id,
+            )
+        )
         await _settle_despite_cancellation(cleanup_task)
-        if not isinstance(exc, Exception):
-            raise
-        if isinstance(exc, JobCapacityError):
-            raise HTTPException(
-                status_code=503 if exc.global_limit else 429,
-                detail=str(exc),
-            ) from exc
-        raise HTTPException(
-            status_code=500,
-            detail="Unable to create analysis job.",
-        ) from exc
+        _raise_memory_submission_error(exc)
 
     ready.set()
     return snapshot
 
 
+def _create_history_task(
+    history: HistoryStore,
+    *,
+    snapshot: JobSnapshot,
+    asset_path: Path,
+    file_name: str,
+    language: str | None,
+    model_source: str,
+    model_endpoint: str | None,
+    local_model_path: str | None,
+    settings: Settings,
+    user_id: str,
+) -> asyncio.Task:
+    return asyncio.create_task(
+        run_in_threadpool(
+            history.create,
+            job_id=snapshot.id,
+            title=Path(file_name).stem,
+            file_name=file_name,
+            language=language,
+            state=snapshot.state.value,
+            created_at=snapshot.created_at,
+            updated_at=snapshot.updated_at,
+            audio_path=asset_path,
+            model_source=model_source,
+            model_location=(
+                local_model_path
+                if model_source == "local"
+                else (model_endpoint or settings.omni_endpoint)
+            ),
+            user_id=user_id,
+        )
+    )
+
+
+async def _compensate_memory_submission(
+    *,
+    snapshot: JobSnapshot | None,
+    asset_path: Path,
+    history: HistoryStore,
+    jobs,
+    user_id: str,
+) -> None:
+    try:
+        if snapshot is None:
+            return
+        try:
+            await jobs.cancel_and_wait(
+                snapshot.id,
+                owner_user_id=user_id,
+            )
+        except Exception:
+            pass
+        try:
+            await run_in_threadpool(
+                history.delete,
+                snapshot.id,
+                user_id=user_id,
+            )
+        except Exception:
+            # Preserve the triggering exception. Any partial row stays
+            # owner-scoped and startup recovery marks it interrupted.
+            pass
+        jobs.remove(snapshot.id, owner_user_id=user_id)
+    finally:
+        try:
+            asset_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _raise_memory_submission_error(exc: BaseException) -> None:
+    if not isinstance(exc, Exception):
+        raise exc
+    if isinstance(exc, JobCapacityError):
+        raise HTTPException(
+            status_code=503 if exc.global_limit else 429,
+            detail=str(exc),
+        ) from exc
+    raise HTTPException(
+        status_code=500,
+        detail="Unable to create analysis job.",
+    ) from exc
+
+
 async def _submit_distributed_analysis_job(
     *,
-    asset,
+    asset: AudioAsset,
     file_name: str,
     language: str | None,
     model_source: str,
@@ -260,25 +343,17 @@ async def _submit_distributed_analysis_job(
     enqueue_task: asyncio.Task | None = None
     try:
         snapshot = await jobs.create_distributed(payload)
-        history_task = asyncio.create_task(
-            run_in_threadpool(
-                history.create,
-                job_id=snapshot.id,
-                title=Path(file_name).stem,
-                file_name=file_name,
-                language=language,
-                state=snapshot.state.value,
-                created_at=snapshot.created_at,
-                updated_at=snapshot.updated_at,
-                audio_path=asset.path.resolve(),
-                model_source=model_source,
-                model_location=(
-                    local_model_path
-                    if model_source == "local"
-                    else (model_endpoint or settings.omni_endpoint)
-                ),
-                user_id=user_id,
-            ),
+        history_task = _create_history_task(
+            history,
+            snapshot=snapshot,
+            asset_path=asset.path.resolve(),
+            file_name=file_name,
+            language=language,
+            model_source=model_source,
+            model_endpoint=model_endpoint,
+            local_model_path=local_model_path,
+            settings=settings,
+            user_id=user_id,
         )
         await asyncio.shield(history_task)
         history_created = True
@@ -300,49 +375,24 @@ async def _submit_distributed_analysis_job(
             detail=str(exc),
         ) from exc
     except BaseException as exc:
-        for task in (history_task, enqueue_task):
-            if task is None:
-                continue
-            try:
-                await _settle_despite_cancellation(task)
-                if task is history_task:
-                    history_created = True
-            except BaseException:
-                pass
-        if snapshot is None:
-            try:
-                snapshot = await jobs.get(
-                    job_id,
-                    owner_user_id=user_id,
-                )
-            except Exception:
-                pass
-        if snapshot is not None:
-            try:
-                await cancel_job(
-                    jobs,
-                    snapshot.id,
-                    owner_user_id=user_id,
-                )
-            except Exception:
-                pass
-            if history_created:
-                try:
-                    await run_in_threadpool(
-                        history.delete,
-                        snapshot.id,
-                        user_id=user_id,
-                    )
-                except Exception:
-                    pass
-            try:
-                await remove_job(
-                    jobs,
-                    snapshot.id,
-                    owner_user_id=user_id,
-                )
-            except Exception:
-                pass
+        history_created = await _settle_distributed_submission_tasks(
+            history_task,
+            enqueue_task,
+            history_created=history_created,
+        )
+        snapshot = await _recover_distributed_snapshot(
+            jobs,
+            snapshot=snapshot,
+            job_id=job_id,
+            user_id=user_id,
+        )
+        await _compensate_distributed_submission(
+            jobs,
+            history,
+            snapshot=snapshot,
+            history_created=history_created,
+            user_id=user_id,
+        )
         asset.path.unlink(missing_ok=True)
         if not isinstance(exc, Exception):
             raise
@@ -350,6 +400,68 @@ async def _submit_distributed_analysis_job(
             status_code=503,
             detail="Unable to enqueue distributed analysis job.",
         ) from exc
+
+
+async def _settle_distributed_submission_tasks(
+    history_task: asyncio.Task | None,
+    enqueue_task: asyncio.Task | None,
+    *,
+    history_created: bool,
+) -> bool:
+    for task in (history_task, enqueue_task):
+        if task is None:
+            continue
+        try:
+            await _settle_despite_cancellation(task)
+            if task is history_task:
+                history_created = True
+        except BaseException:
+            pass
+    return history_created
+
+
+async def _recover_distributed_snapshot(
+    jobs,
+    *,
+    snapshot: JobSnapshot | None,
+    job_id: str,
+    user_id: str,
+) -> JobSnapshot | None:
+    if snapshot is not None:
+        return snapshot
+    try:
+        return await jobs.get(job_id, owner_user_id=user_id)
+    except Exception:
+        return None
+
+
+async def _compensate_distributed_submission(
+    jobs,
+    history: HistoryStore,
+    *,
+    snapshot: JobSnapshot | None,
+    history_created: bool,
+    user_id: str,
+) -> None:
+    if snapshot is None:
+        return
+    try:
+        await cancel_job(jobs, snapshot.id, owner_user_id=user_id)
+    except Exception:
+        pass
+    if history_created:
+        try:
+            await run_in_threadpool(
+                history.delete,
+                snapshot.id,
+                user_id=user_id,
+            )
+        except Exception:
+            pass
+    try:
+        await remove_job(jobs, snapshot.id, owner_user_id=user_id)
+    except Exception:
+        pass
 
 
 async def analyze_upload(

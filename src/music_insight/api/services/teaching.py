@@ -19,6 +19,7 @@ from music_insight.api.contracts.teaching import (
     TeachingMessage,
     TeachingMessageStatus,
 )
+from music_insight.api.contracts.history import HistoryDetail
 from music_insight.api.history import HistoryStore
 from music_insight.api.services.history import require_history
 from music_insight.api.teaching import (
@@ -40,6 +41,7 @@ from music_insight.teaching.models import (
     RelistenPolicy,
     RelistenRequest,
     TeachingChatContext,
+    TeachingChatResponse,
     TeachingTimeSpan,
 )
 from music_insight.teaching.protocols import (
@@ -55,6 +57,7 @@ from music_insight.teaching.retrieval import (
     nearby_lyrics,
     section_at_time,
 )
+from music_insight.schemas import AnalysisResult
 
 
 TEACHING_SCHEMA_VERSION = 2
@@ -119,58 +122,17 @@ async def generate_teaching_guide(
     }
     if force:
         reserve_options["force"] = True
-    reservation_task = asyncio.create_task(
-        run_in_threadpool(
-            repository.mark_understanding_map_pending,
-            history_id,
-            **reserve_options,
-        )
+    record, cached_response = await _reserve_guide_generation(
+        repository,
+        history_id=history_id,
+        user_id=user_id,
+        source_hash=source_hash,
+        reserve_options=reserve_options,
     )
-    try:
-        record, should_generate = await asyncio.shield(reservation_task)
-    except asyncio.CancelledError:
-        try:
-            cancelled_record, cancelled_owner = (
-                await _settle_despite_cancellation(reservation_task)
-            )
-        except Exception:
-            pass
-        else:
-            if cancelled_owner:
-                await asyncio.shield(
-                    _fail_map_reservation(
-                        repository,
-                        history_id=history_id,
-                        user_id=user_id,
-                        source_hash=source_hash,
-                        schema_version=TEACHING_SCHEMA_VERSION,
-                        reservation_token=str(cancelled_record["updated_at"]),
-                        error="导赏地图生成请求已取消。",
-                    )
-                )
-        raise
-    except TeachingEntryNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if not should_generate:
-        if (
-            record.get("status") == TeachingGuideStatus.COMPLETE
-            and record.get("map_payload") is not None
-            and record.get("source_result_hash") == source_hash
-        ):
-            return _guide_from_record(
-                record,
-                current_source_hash=source_hash,
-                cached=True,
-            )
-        raise HTTPException(
-            status_code=409,
-            detail="相同版本的导赏地图正在生成，请稍后重试。",
-            headers={"Retry-After": "2"},
-        )
+    if cached_response is not None:
+        return cached_response
 
     reservation_token = str(record["updated_at"])
-    fallback = EvidenceTeachingModel()
-    generation_warning: str | None = None
     try:
         profile_record = await run_in_threadpool(
             repository.get_listener_profile,
@@ -183,33 +145,9 @@ async def generate_teaching_guide(
             language=entry.language,
             listener_profile=profile_from_record(profile_record),
         )
-        if model is None:
-            understanding_map = await fallback.build_understanding_map(context)
-        else:
-            try:
-                understanding_map = await model.build_understanding_map(context)
-                validate_understanding_map(
-                    understanding_map,
-                    result=entry.result,
-                    duration_s=duration_s,
-                )
-            except Exception as exc:
-                generation_warning = (
-                    "统一模型导赏输出未通过证据校验，已使用保守地图："
-                    f"{_bounded_error(exc, 500)}"
-                )
-                understanding_map = await fallback.build_understanding_map(context)
-        if generation_warning:
-            understanding_map = understanding_map.model_copy(
-                update={
-                    "warnings": [
-                        *understanding_map.warnings[:18],
-                        generation_warning,
-                    ]
-                }
-            )
-        validate_understanding_map(
-            understanding_map,
+        understanding_map, generation_warning = await _build_understanding_map(
+            context,
+            model=model,
             result=entry.result,
             duration_s=duration_s,
         )
@@ -258,6 +196,126 @@ async def generate_teaching_guide(
         current_source_hash=source_hash,
         cached=False,
     )
+
+
+async def _reserve_guide_generation(
+    repository: TeachingRepository,
+    *,
+    history_id: str,
+    user_id: str,
+    source_hash: str,
+    reserve_options: dict[str, Any],
+) -> tuple[dict[str, Any], TeachingGuideResponse | None]:
+    reservation_task = asyncio.create_task(
+        run_in_threadpool(
+            repository.mark_understanding_map_pending,
+            history_id,
+            **reserve_options,
+        )
+    )
+    try:
+        record, should_generate = await asyncio.shield(reservation_task)
+    except asyncio.CancelledError:
+        await _compensate_cancelled_guide_reservation(
+            reservation_task,
+            repository=repository,
+            history_id=history_id,
+            user_id=user_id,
+            source_hash=source_hash,
+        )
+        raise
+    except TeachingEntryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if should_generate:
+        return record, None
+    if (
+        record.get("status") == TeachingGuideStatus.COMPLETE
+        and record.get("map_payload") is not None
+        and record.get("source_result_hash") == source_hash
+    ):
+        return (
+            record,
+            _guide_from_record(
+                record,
+                current_source_hash=source_hash,
+                cached=True,
+            ),
+        )
+    raise HTTPException(
+        status_code=409,
+        detail="相同版本的导赏地图正在生成，请稍后重试。",
+        headers={"Retry-After": "2"},
+    )
+
+
+async def _compensate_cancelled_guide_reservation(
+    reservation_task: asyncio.Task,
+    *,
+    repository: TeachingRepository,
+    history_id: str,
+    user_id: str,
+    source_hash: str,
+) -> None:
+    try:
+        cancelled_record, cancelled_owner = (
+            await _settle_despite_cancellation(reservation_task)
+        )
+    except Exception:
+        return
+    if cancelled_owner:
+        await asyncio.shield(
+            _fail_map_reservation(
+                repository,
+                history_id=history_id,
+                user_id=user_id,
+                source_hash=source_hash,
+                schema_version=TEACHING_SCHEMA_VERSION,
+                reservation_token=str(cancelled_record["updated_at"]),
+                error="导赏地图生成请求已取消。",
+            )
+        )
+
+
+async def _build_understanding_map(
+    context: MapGenerationContext,
+    *,
+    model: TeachingModelAdapter | None,
+    result: AnalysisResult,
+    duration_s: float,
+) -> tuple[MusicUnderstandingMap, str | None]:
+    fallback = EvidenceTeachingModel()
+    generation_warning: str | None = None
+    if model is None:
+        understanding_map = await fallback.build_understanding_map(context)
+    else:
+        try:
+            understanding_map = await model.build_understanding_map(context)
+            validate_understanding_map(
+                understanding_map,
+                result=result,
+                duration_s=duration_s,
+            )
+        except Exception as exc:
+            generation_warning = (
+                "统一模型导赏输出未通过证据校验，已使用保守地图："
+                f"{_bounded_error(exc, 500)}"
+            )
+            understanding_map = await fallback.build_understanding_map(context)
+    if generation_warning:
+        understanding_map = understanding_map.model_copy(
+            update={
+                "warnings": [
+                    *understanding_map.warnings[:18],
+                    generation_warning,
+                ]
+            }
+        )
+    validate_understanding_map(
+        understanding_map,
+        result=result,
+        duration_s=duration_s,
+    )
+    return understanding_map, generation_warning
 
 
 async def get_listener_profile(
@@ -411,130 +469,38 @@ async def answer_music_question(
     if conversation is None:
         raise HTTPException(status_code=404, detail="导赏对话不存在。")
 
-    source_hash = analysis_result_hash(entry.result)
-    map_record = await run_in_threadpool(
-        repository.get_understanding_map,
-        history_id,
+    understanding_map = await _load_understanding_map(
+        history=history,
+        repository=repository,
+        history_id=history_id,
         user_id=user_id,
+        result=entry.result,
+        model=model,
     )
-    usable_map = (
-        map_record is not None
-        and map_record.get("status")
-        in {TeachingGuideStatus.COMPLETE, TeachingGuideStatus.PENDING}
-        and map_record.get("schema_version") == TEACHING_SCHEMA_VERSION
-        and map_record.get("source_result_hash") == source_hash
-        and map_record.get("map_payload") is not None
+    reserved, existing = await _reserve_chat_message(
+        repository,
+        history_id=history_id,
+        conversation_id=conversation_id,
+        user_id=user_id,
+        payload=payload,
     )
-    if not usable_map:
-        guide = await generate_teaching_guide(
-            history=history,
-            repository=repository,
-            history_id=history_id,
-            user_id=user_id,
-            model=model,
-        )
-        understanding_map = guide.understanding_map
-    else:
-        understanding_map = MusicUnderstandingMap.model_validate(
-            map_record["map_payload"]
-        )
-    if understanding_map is None:
-        raise HTTPException(status_code=502, detail="导赏地图生成失败。")
-
-    reservation_task = asyncio.create_task(
-        run_in_threadpool(
-            repository.reserve_message,
-            conversation_id,
-            analysis_id=history_id,
-            user_id=user_id,
-            client_request_id=payload.client_request_id,
-            request_payload=payload.model_dump(mode="json"),
-            stale_before=datetime.now(UTC) - TEACHING_PENDING_LEASE,
-        )
-    )
-    try:
-        reserved, created = await asyncio.shield(reservation_task)
-    except asyncio.CancelledError:
-        try:
-            cancelled_record, cancelled_owner = (
-                await _settle_despite_cancellation(reservation_task)
-            )
-        except Exception:
-            pass
-        else:
-            if cancelled_owner:
-                await asyncio.shield(
-                    _fail_message_reservation(
-                        repository,
-                        message_id=str(cancelled_record["id"]),
-                        user_id=user_id,
-                        reservation_token=str(cancelled_record["updated_at"]),
-                        error="导赏问答请求已取消。",
-                    )
-                )
-        raise
-    except TeachingConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except TeachingEntryNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if not created:
-        existing = _message_from_record(reserved)
-        if existing.status == TeachingMessageStatus.COMPLETE:
-            return existing
-        if existing.status == TeachingMessageStatus.PENDING:
-            raise HTTPException(
-                status_code=409,
-                detail="相同问题正在处理，请稍后重试。",
-                headers={"Retry-After": "1"},
-            )
-        raise HTTPException(
-            status_code=409,
-            detail="此前请求失败，请使用新的 client_request_id 重试。",
-        )
+    if existing is not None:
+        return existing
 
     message_id = str(reserved["id"])
     reservation_token = str(reserved["updated_at"])
-    relisten_warning: str | None = None
     try:
-        profile_record, message_records = await _profile_and_messages(
+        context, targets = await _prepare_chat_context(
             repository,
+            entry=entry,
+            understanding_map=understanding_map,
+            payload=payload,
             user_id=user_id,
             history_id=history_id,
             conversation_id=conversation_id,
-        )
-        target = focus_span(
-            current_time_s=payload.current_time_s,
-            duration_s=duration_s,
-            selected_range=payload.selected_range,
-        )
-        comparison_ranges = payload.compare_ranges
-        targets = comparison_ranges or [target]
-        context = TeachingChatContext(
-            analysis_id=history_id,
-            question=payload.message,
-            current_time_s=payload.current_time_s,
-            selected_range=payload.selected_range,
-            compare_ranges=comparison_ranges,
-            current_section=section_at_time(
-                understanding_map,
-                payload.current_time_s,
-            ),
-            nearby_lyrics=nearby_lyrics(entry.result, targets=targets),
-            nearby_events=nearby_events(
-                understanding_map,
-                target=target,
-                comparison_ranges=comparison_ranges,
-            ),
-            nearby_analysis_evidence=nearby_analysis_evidence(
-                entry.result,
-                targets=targets,
-            ),
-            conversation_history=_turns_from_records(message_records),
-            listener_profile=profile_from_record(profile_record),
-            analysis_summary=entry.result.summary[:4000],
-            vocal_presence=entry.result.vocal_presence,
             duration_s=duration_s,
         )
+        relisten_warning: str | None = None
         if _should_relisten(payload, context):
             context, relisten_warning = await _relisten(
                 history=history,
@@ -546,31 +512,11 @@ async def answer_music_question(
                 context=context,
                 targets=targets,
             )
-        fallback = EvidenceTeachingModel()
-        if model is None:
-            response = await fallback.answer_music_question(context)
-        else:
-            try:
-                response = await model.answer_music_question(context)
-                validate_chat_response(response, context=context)
-            except Exception as exc:
-                response = await fallback.answer_music_question(context)
-                warning = (
-                    "统一模型回答未通过证据校验，已使用保守回答："
-                    f"{_bounded_error(exc, 400)}"
-                )
-                response = response.model_copy(
-                    update={"warnings": [*response.warnings[:8], warning]}
-                )
-        if relisten_warning:
-            response = response.model_copy(
-                update={
-                    "warnings": [
-                        *response.warnings[:8],
-                        relisten_warning,
-                    ]
-                }
-            )
+        response = await _answer_chat_context(
+            context,
+            model=model,
+            relisten_warning=relisten_warning,
+        )
         validate_chat_response(response, context=context)
         completed = await run_in_threadpool(
             repository.complete_message,
@@ -615,6 +561,203 @@ async def answer_music_question(
             status_code=502,
             detail=f"音乐导赏回答失败：{_bounded_error(exc, 500)}",
         ) from exc
+
+
+async def _load_understanding_map(
+    *,
+    history: HistoryStore,
+    repository: TeachingRepository,
+    history_id: str,
+    user_id: str,
+    result: AnalysisResult,
+    model: TeachingModelAdapter | None,
+) -> MusicUnderstandingMap:
+    source_hash = analysis_result_hash(result)
+    map_record = await run_in_threadpool(
+        repository.get_understanding_map,
+        history_id,
+        user_id=user_id,
+    )
+    usable_map = (
+        map_record is not None
+        and map_record.get("status")
+        in {TeachingGuideStatus.COMPLETE, TeachingGuideStatus.PENDING}
+        and map_record.get("schema_version") == TEACHING_SCHEMA_VERSION
+        and map_record.get("source_result_hash") == source_hash
+        and map_record.get("map_payload") is not None
+    )
+    if usable_map:
+        return MusicUnderstandingMap.model_validate(map_record["map_payload"])
+    guide = await generate_teaching_guide(
+        history=history,
+        repository=repository,
+        history_id=history_id,
+        user_id=user_id,
+        model=model,
+    )
+    if guide.understanding_map is None:
+        raise HTTPException(status_code=502, detail="导赏地图生成失败。")
+    return guide.understanding_map
+
+
+async def _reserve_chat_message(
+    repository: TeachingRepository,
+    *,
+    history_id: str,
+    conversation_id: str,
+    user_id: str,
+    payload: TeachingChatRequest,
+) -> tuple[dict[str, Any], TeachingMessage | None]:
+    reservation_task = asyncio.create_task(
+        run_in_threadpool(
+            repository.reserve_message,
+            conversation_id,
+            analysis_id=history_id,
+            user_id=user_id,
+            client_request_id=payload.client_request_id,
+            request_payload=payload.model_dump(mode="json"),
+            stale_before=datetime.now(UTC) - TEACHING_PENDING_LEASE,
+        )
+    )
+    try:
+        reserved, created = await asyncio.shield(reservation_task)
+    except asyncio.CancelledError:
+        await _compensate_cancelled_message_reservation(
+            reservation_task,
+            repository=repository,
+            user_id=user_id,
+        )
+        raise
+    except TeachingConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except TeachingEntryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if created:
+        return reserved, None
+    existing = _message_from_record(reserved)
+    if existing.status == TeachingMessageStatus.COMPLETE:
+        return reserved, existing
+    if existing.status == TeachingMessageStatus.PENDING:
+        raise HTTPException(
+            status_code=409,
+            detail="相同问题正在处理，请稍后重试。",
+            headers={"Retry-After": "1"},
+        )
+    raise HTTPException(
+        status_code=409,
+        detail="此前请求失败，请使用新的 client_request_id 重试。",
+    )
+
+
+async def _compensate_cancelled_message_reservation(
+    reservation_task: asyncio.Task,
+    *,
+    repository: TeachingRepository,
+    user_id: str,
+) -> None:
+    try:
+        cancelled_record, cancelled_owner = (
+            await _settle_despite_cancellation(reservation_task)
+        )
+    except Exception:
+        return
+    if cancelled_owner:
+        await asyncio.shield(
+            _fail_message_reservation(
+                repository,
+                message_id=str(cancelled_record["id"]),
+                user_id=user_id,
+                reservation_token=str(cancelled_record["updated_at"]),
+                error="导赏问答请求已取消。",
+            )
+        )
+
+
+async def _prepare_chat_context(
+    repository: TeachingRepository,
+    *,
+    entry: HistoryDetail,
+    understanding_map: MusicUnderstandingMap,
+    payload: TeachingChatRequest,
+    user_id: str,
+    history_id: str,
+    conversation_id: str,
+    duration_s: float,
+) -> tuple[TeachingChatContext, list[TeachingTimeSpan]]:
+    profile_record, message_records = await _profile_and_messages(
+        repository,
+        user_id=user_id,
+        history_id=history_id,
+        conversation_id=conversation_id,
+    )
+    target = focus_span(
+        current_time_s=payload.current_time_s,
+        duration_s=duration_s,
+        selected_range=payload.selected_range,
+    )
+    comparison_ranges = payload.compare_ranges
+    targets = comparison_ranges or [target]
+    context = TeachingChatContext(
+        analysis_id=history_id,
+        question=payload.message,
+        current_time_s=payload.current_time_s,
+        selected_range=payload.selected_range,
+        compare_ranges=comparison_ranges,
+        current_section=section_at_time(
+            understanding_map,
+            payload.current_time_s,
+        ),
+        nearby_lyrics=nearby_lyrics(entry.result, targets=targets),
+        nearby_events=nearby_events(
+            understanding_map,
+            target=target,
+            comparison_ranges=comparison_ranges,
+        ),
+        nearby_analysis_evidence=nearby_analysis_evidence(
+            entry.result,
+            targets=targets,
+        ),
+        conversation_history=_turns_from_records(message_records),
+        listener_profile=profile_from_record(profile_record),
+        analysis_summary=entry.result.summary[:4000],
+        vocal_presence=entry.result.vocal_presence,
+        duration_s=duration_s,
+    )
+    return context, targets
+
+
+async def _answer_chat_context(
+    context: TeachingChatContext,
+    *,
+    model: TeachingModelAdapter | None,
+    relisten_warning: str | None,
+) -> TeachingChatResponse:
+    fallback = EvidenceTeachingModel()
+    if model is None:
+        response = await fallback.answer_music_question(context)
+    else:
+        try:
+            response = await model.answer_music_question(context)
+            validate_chat_response(response, context=context)
+        except Exception as exc:
+            response = await fallback.answer_music_question(context)
+            warning = (
+                "统一模型回答未通过证据校验，已使用保守回答："
+                f"{_bounded_error(exc, 400)}"
+            )
+            response = response.model_copy(
+                update={"warnings": [*response.warnings[:8], warning]}
+            )
+    if relisten_warning:
+        response = response.model_copy(
+            update={
+                "warnings": [
+                    *response.warnings[:8],
+                    relisten_warning,
+                ]
+            }
+        )
+    return response
 
 
 async def _profile_and_messages(
