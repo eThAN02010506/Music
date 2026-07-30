@@ -67,11 +67,11 @@ class Settings(BaseSettings):
     comni_chunk_seconds: float = Field(default=15.0, ge=5, le=60)
     comni_open_timeout_seconds: float = Field(default=10.0, ge=1, le=60)
     comni_first_event_timeout_seconds: float = Field(
-        default=180.0,
+        default=600.0,
         ge=10,
         le=900,
     )
-    comni_idle_timeout_seconds: float = Field(default=180.0, ge=10, le=900)
+    comni_idle_timeout_seconds: float = Field(default=600.0, ge=10, le=900)
     comni_request_timeout_seconds: float = Field(
         default=600.0,
         ge=60,

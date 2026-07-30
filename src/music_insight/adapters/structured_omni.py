@@ -186,6 +186,12 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
                 progress,
             )
 
+    def should_abort_chunking(self, error: Exception) -> bool:
+        """Return whether one provider failure invalidates the remaining batch."""
+
+        del error
+        return False
+
     async def resynthesize_verified_lyrics(
         self,
         lyrics: list[LyricsSegment],

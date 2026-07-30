@@ -195,6 +195,27 @@ class FakeJsonRetryOmni(QwenOmniUnifiedAdapter):
         )
 
 
+class FakeBatchUnavailableOmni(QwenOmniUnifiedAdapter):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.analysis_calls = 0
+        self.synthesis_calls = 0
+
+    async def _model(self):
+        return "test-model"
+
+    async def _analyze_chunk(self, **kwargs):
+        self.analysis_calls += 1
+        raise RuntimeError("Worker busy")
+
+    def should_abort_chunking(self, error):
+        return "Worker busy" in str(error)
+
+    async def _synthesize_report(self, **kwargs):
+        self.synthesis_calls += 1
+        raise AssertionError("aborted batches must not call remote synthesis")
+
+
 class FakeDspAdapter:
     async def analyze(self, asset):
         return DspResult(
@@ -716,6 +737,30 @@ def test_unified_adapter_reports_chunk_and_synthesis_progress(tmp_path):
     assert any("2/2" in message for _, _, message in updates)
     assert [stage for stage, _, _ in updates][-1] == "model_synthesis"
     assert updates[-1][1] == 1.0
+
+
+def test_unified_adapter_aborts_remaining_chunks_when_provider_is_unavailable(
+    tmp_path,
+):
+    audio = tmp_path / "batch-unavailable.wav"
+    _write_test_audio(audio, seconds=12.0, sample_rate=16_000)
+    adapter = FakeBatchUnavailableOmni(
+        endpoint="http://127.0.0.1:9999",
+        model="test-model",
+        chunk_seconds=5,
+        chunk_overlap_seconds=0,
+    )
+
+    result = asyncio.run(adapter.analyze(_asset(audio), DspResult()))
+
+    assert adapter.analysis_calls == 1
+    assert adapter.synthesis_calls == 0
+    batch_error = next(
+        item for item in result.scene.evidence if item.id == "omni.batch.error"
+    )
+    assert batch_error.metadata["failed_chunk"] == 1
+    assert batch_error.metadata["skipped_chunks"] == 2
+    assert "Worker busy" in batch_error.text
 
 
 def test_orchestrators_share_model_concurrency_gate(tmp_path):

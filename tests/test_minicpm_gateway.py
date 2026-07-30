@@ -15,6 +15,7 @@ from music_insight.adapters.minicpm_gateway import (
     MiniCpmGatewayClient,
     MiniCpmGatewayError,
     MiniCpmGatewayProtocolError,
+    MiniCpmGatewayUnavailableError,
     openai_request_to_comni,
     wav_to_float32_base64,
 )
@@ -197,7 +198,7 @@ def test_request_conversion_uses_comni_audio_and_explicitly_disables_tts():
     payload = openai_request_to_comni(request)
 
     assert payload["tts"] == {"enabled": False}
-    assert payload["streaming"] is False
+    assert payload["streaming"] is True
     assert payload["omni_mode"] is False
     assert payload["enable_thinking"] is False
     assert payload["generation"] == {
@@ -292,6 +293,17 @@ def test_client_turns_gateway_error_event_into_bounded_adapter_error():
         asyncio.run(client.request_text({"messages": []}, timeout=5))
 
 
+def test_client_marks_worker_busy_as_batch_unavailable():
+    websocket = FakeWebSocket([_event("error", error="Worker busy")])
+    client = MiniCpmGatewayClient(
+        "http://model.local:8005",
+        connect_factory=FakeConnectFactory(websocket),
+    )
+
+    with pytest.raises(MiniCpmGatewayUnavailableError, match="Worker busy"):
+        asyncio.run(client.request_text({"messages": []}, timeout=5))
+
+
 @pytest.mark.parametrize(
     ("frame", "message"),
     [
@@ -322,8 +334,29 @@ def test_client_converts_event_timeout_without_network_access():
         ),
     )
 
-    with pytest.raises(MiniCpmGatewayError, match="未返回下一事件"):
+    with pytest.raises(
+        MiniCpmGatewayUnavailableError,
+        match="未返回下一事件",
+    ):
         asyncio.run(client.request_text({"messages": []}, timeout=5))
+
+
+def test_request_conversion_bounds_short_audio_extraction_tokens():
+    request = {
+        "messages": [{"role": "user", "content": "Analyze."}],
+        "max_tokens": 1800,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "music_chunk_analysis",
+                "schema": {"type": "object"},
+            },
+        },
+    }
+
+    payload = openai_request_to_comni(request)
+
+    assert payload["generation"]["max_new_tokens"] == 768
 
 
 def test_adapter_inherits_provider_neutral_schema_gate():

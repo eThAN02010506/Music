@@ -33,6 +33,10 @@ class MiniCpmGatewayProtocolError(MiniCpmGatewayError):
     """Raised when the Gateway violates the documented event protocol."""
 
 
+class MiniCpmGatewayUnavailableError(MiniCpmGatewayError):
+    """Raised when continuing a chunk batch would overload the Gateway."""
+
+
 class _WebSocket(Protocol):
     async def send(self, message: str | bytes) -> None: ...
 
@@ -56,8 +60,8 @@ class MiniCpmGatewayClient:
         *,
         connect_factory: _ConnectFactory = websocket_connect,
         open_timeout: float = 10.0,
-        first_event_timeout: float = 180.0,
-        idle_timeout: float = 180.0,
+        first_event_timeout: float = 600.0,
+        idle_timeout: float = 600.0,
         request_timeout: float = 600.0,
         close_timeout: float = 5.0,
         max_message_bytes: int = 8 * 1024 * 1024,
@@ -98,7 +102,7 @@ class MiniCpmGatewayClient:
         except asyncio.CancelledError:
             raise
         except TimeoutError as exc:
-            raise MiniCpmGatewayError(
+            raise MiniCpmGatewayUnavailableError(
                 f"MiniCPM Gateway 请求超过 {total_timeout:g} 秒。"
             ) from exc
         except MiniCpmGatewayError:
@@ -109,7 +113,7 @@ class MiniCpmGatewayClient:
             SecurityError,
             OSError,
         ) as exc:
-            raise MiniCpmGatewayError(
+            raise MiniCpmGatewayUnavailableError(
                 f"MiniCPM Gateway WebSocket 连接失败：{str(exc)[:400]}"
             ) from exc
 
@@ -143,7 +147,7 @@ class MiniCpmGatewayClient:
                     async with asyncio.timeout(event_timeout):
                         raw = await websocket.recv()
                 except TimeoutError as exc:
-                    raise MiniCpmGatewayError(
+                    raise MiniCpmGatewayUnavailableError(
                         "MiniCPM Gateway 长时间未返回下一事件。"
                     ) from exc
                 event = _decode_event(raw)
@@ -175,6 +179,10 @@ class MiniCpmGatewayClient:
                     return text
                 if event_type == "error":
                     detail = str(event.get("error") or "未知 Gateway 错误")
+                    if "worker busy" in detail.casefold():
+                        raise MiniCpmGatewayUnavailableError(
+                            f"MiniCPM Gateway 推理失败：{detail[:500]}"
+                        )
                     raise MiniCpmGatewayError(
                         f"MiniCPM Gateway 推理失败：{detail[:500]}"
                     )
@@ -235,6 +243,9 @@ class MiniCpmGatewayAdapter(StructuredOmniAdapter):
         payload = openai_request_to_comni(request)
         return await self.client.request_text(payload, timeout=timeout)
 
+    def should_abort_chunking(self, error: Exception) -> bool:
+        return isinstance(error, MiniCpmGatewayUnavailableError)
+
 
 def openai_request_to_comni(request: dict[str, Any]) -> dict[str, Any]:
     """Map the workflow's canonical request into the Comni Chat schema."""
@@ -267,11 +278,13 @@ def openai_request_to_comni(request: dict[str, Any]) -> dict[str, Any]:
             },
         )
 
-    max_tokens = min(4096, max(1, int(request.get("max_tokens", 1200))))
+    max_tokens = _comni_max_tokens(request)
     temperature = max(0.0, min(2.0, float(request.get("temperature", 0.0))))
     return {
         "messages": messages,
-        "streaming": False,
+        # Streaming avoids a long silent interval between prefill_done and done.
+        # The client still returns only the final accumulated text.
+        "streaming": True,
         "generation": {
             "max_new_tokens": max_tokens,
             "temperature": temperature,
@@ -283,6 +296,24 @@ def openai_request_to_comni(request: dict[str, Any]) -> dict[str, Any]:
         "omni_mode": False,
         "enable_thinking": False,
     }
+
+
+def _comni_max_tokens(request: dict[str, Any]) -> int:
+    """Keep short audio extraction bounded without truncating teaching calls."""
+
+    requested = min(4096, max(1, int(request.get("max_tokens", 1200))))
+    response_format = request.get("response_format")
+    if not isinstance(response_format, dict):
+        return requested
+    definition = response_format.get("json_schema")
+    if not isinstance(definition, dict):
+        return requested
+    schema_name = str(definition.get("name") or "")
+    limits = {
+        "music_chunk_analysis": 768,
+        "music_missing_fields": 512,
+    }
+    return min(requested, limits.get(schema_name, requested))
 
 
 def _response_format_instruction(value: object) -> str | None:
