@@ -92,6 +92,7 @@ def parse_understanding_map(
         for item in _dict_items(payload.get("key_moments"))
     ]
     return MusicUnderstandingMap(
+        output_language=context.output_language,
         core_expression=payload["core_expression"],
         overall_atmosphere=payload["overall_atmosphere"],
         emotional_arc=emotional_arc,
@@ -105,8 +106,12 @@ def parse_understanding_map(
 
 def parse_teaching_chat_response(
     payload: dict[str, Any],
+    *,
+    output_language: str = "zh",
 ) -> TeachingChatResponse:
-    return TeachingChatResponse.model_validate(payload)
+    return TeachingChatResponse.model_validate(
+        {**payload, "output_language": output_language}
+    )
 
 
 def parse_relisten_result(

@@ -351,8 +351,11 @@ def test_guide_and_song_chat_persist_and_replay_idempotently(tmp_path):
     generated, cached, regenerated, first, replay = asyncio.run(exercise())
 
     assert generated.understanding_map is not None
-    assert generated.schema_version == 2
-    assert generated.understanding_map.schema_version == 2
+    assert generated.schema_version == TEACHING_SCHEMA_VERSION
+    assert (
+        generated.understanding_map.schema_version
+        == TEACHING_SCHEMA_VERSION
+    )
     assert generated.cached is False
     assert cached.cached is True
     assert regenerated.cached is False
@@ -367,6 +370,35 @@ def test_guide_and_song_chat_persist_and_replay_idempotently(tmp_path):
             user_id=user.id,
         )
     ) == 1
+
+
+def test_guide_language_change_rebuilds_without_client_force(tmp_path):
+    history, repository, user, _ = _stores(tmp_path)
+
+    async def exercise():
+        chinese = await generate_teaching_guide(
+            history=history,
+            repository=repository,
+            history_id="song-1",
+            user_id=user.id,
+            output_language="zh",
+        )
+        english = await generate_teaching_guide(
+            history=history,
+            repository=repository,
+            history_id="song-1",
+            user_id=user.id,
+            output_language="en",
+        )
+        return chinese, english
+
+    chinese, english = asyncio.run(exercise())
+
+    assert chinese.understanding_map is not None
+    assert chinese.understanding_map.output_language == "zh"
+    assert english.understanding_map is not None
+    assert english.understanding_map.output_language == "en"
+    assert english.cached is False
 
 
 def test_song_chat_uses_complete_map_while_model_enhancement_is_pending(

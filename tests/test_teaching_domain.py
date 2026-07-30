@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 
 import pytest
 from pydantic import ValidationError
@@ -287,6 +288,135 @@ def test_instrumental_fallback_uses_instrument_tasks_and_conservative_confidence
         validate_understanding_map(
             invalid_map,
             result=instrumental,
+            duration_s=20,
+        )
+
+
+def test_fallback_sections_have_distinct_evidence_based_roles():
+    base = _result()
+    events = [
+        Evidence(
+            id="opening",
+            source="audio-model",
+            kind=EvidenceType.OBSERVED,
+            text="弦乐先以较薄的织体建立声音起点",
+            confidence=0.7,
+            span=TimeSpan(start_s=0, end_s=24),
+            metadata={"teaching_dimension": "instrumentation"},
+        ),
+        Evidence(
+            id="middle",
+            source="audio-model",
+            kind=EvidenceType.OBSERVED,
+            text="中段力度增强，节奏重音变得密集",
+            confidence=0.72,
+            span=TimeSpan(start_s=34, end_s=56),
+            metadata={"teaching_dimension": "dynamics"},
+        ),
+        Evidence(
+            id="closing",
+            source="audio-model",
+            kind=EvidenceType.OBSERVED,
+            text="末段音量回落，织体逐步变薄",
+            confidence=0.71,
+            span=TimeSpan(start_s=66, end_s=88),
+            metadata={"teaching_dimension": "structure"},
+        ),
+    ]
+    result = base.model_copy(
+        update={
+            "lyrics": [],
+            "sound_events": events,
+            "evidence": events,
+        }
+    )
+
+    understanding_map = asyncio.run(
+        EvidenceTeachingModel().build_understanding_map(
+            MapGenerationContext(
+                analysis_id="section-roles",
+                result=result,
+                duration_s=90,
+                output_language="zh",
+                listener_profile=ListenerProfile(),
+            )
+        )
+    )
+
+    roles = [section.expressive_role for section in understanding_map.sections]
+    assert len(roles) == 3
+    assert len(set(roles)) == 3
+    assert "建立作品的声音起点" in roles[0]
+    assert "延续或对照前段材料" in roles[1]
+    assert "形成抵达或收束" in roles[2]
+    assert all("用于定位复听的时间分区" not in role for role in roles)
+
+
+def test_fallback_english_contract_localizes_teacher_prose():
+    result = _result()
+    understanding_map = asyncio.run(
+        EvidenceTeachingModel().build_understanding_map(
+            MapGenerationContext(
+                analysis_id="english-guide",
+                result=result,
+                duration_s=20,
+                language="en",
+                output_language="en",
+                listener_profile=ListenerProfile(),
+            )
+        )
+    )
+    validate_understanding_map(
+        understanding_map,
+        result=result,
+        duration_s=20,
+    )
+
+    prose = [
+        understanding_map.core_expression,
+        understanding_map.overall_atmosphere,
+        *(section.expressive_role for section in understanding_map.sections),
+        *(event.observation for event in understanding_map.events),
+    ]
+    assert understanding_map.output_language == "en"
+    assert all(not re.search(r"[\u3400-\u9fff]", value) for value in prose)
+
+    context = TeachingChatContext(
+        analysis_id="english-guide",
+        question="What changes here?",
+        current_time_s=8,
+        nearby_events=understanding_map.events,
+        listener_profile=ListenerProfile(),
+        analysis_summary=result.summary,
+        duration_s=20,
+        output_language="en",
+    )
+    response = asyncio.run(
+        EvidenceTeachingModel().answer_music_question(context)
+    )
+    validate_chat_response(response, context=context)
+    assert response.output_language == "en"
+    assert "Short answer:" in response.answer
+    assert not re.search(r"[\u3400-\u9fff]", response.answer)
+
+
+def test_language_validation_rejects_mixed_teacher_prose():
+    result, understanding_map = _understanding_map()
+    mixed = understanding_map.events[0].model_copy(
+        update={
+            "interpretation": (
+                "The texture becomes brighter and more energetic."
+            )
+        }
+    )
+    invalid = understanding_map.model_copy(
+        update={"events": [mixed, *understanding_map.events[1:]]}
+    )
+
+    with pytest.raises(GroundingError, match="output language zh"):
+        validate_understanding_map(
+            invalid,
+            result=result,
             duration_s=20,
         )
 

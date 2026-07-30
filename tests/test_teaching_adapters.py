@@ -254,6 +254,9 @@ def test_map_request_is_strict_bounded_and_treats_lyrics_as_untrusted() -> None:
     assert malicious in user_text
     assert request["temperature"] == 0
     assert request["max_tokens"] <= 4096
+    assert '"audio_language_hint":"en"' in user_text
+    assert '"output_language":"zh"' in user_text
+    assert "所有面向用户的字段必须只用简体中文" in user_text
     response_format = request["response_format"]
     assert response_format["json_schema"]["name"] == "music_understanding_map"
     assert response_format["json_schema"]["strict"] is True

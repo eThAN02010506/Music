@@ -51,10 +51,11 @@ export function ListeningChat({
   profile: ListenerProfile;
   onLevelChange: (level: ListenerLevel) => Promise<void>;
 }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
+  const outputLanguage = locale === "en" ? "en" : "zh";
   const player = usePlayer();
   const snapshot = usePlayerSnapshot();
-  const conversation = useSongConversation(historyId);
+  const conversation = useSongConversation(historyId, outputLanguage);
   const [question, setQuestion] = useState("");
   const [rangeMode, setRangeMode] = useState<ChatRangeMode>("current");
   const [updatingLevel, setUpdatingLevel] = useState(false);
@@ -83,6 +84,7 @@ export function ListeningChat({
       snapshot: requestSnapshot,
       mode,
       requestId: createClientRequestId(),
+      outputLanguage,
     });
     const result = await conversation.send(payload);
     if (result) setQuestion("");

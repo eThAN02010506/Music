@@ -557,6 +557,8 @@ const english: Record<string, string> = {
   "进度连接暂时中断，正在自动恢复…":
     "The progress connection was interrupted and is recovering automatically…",
   "你": "You",
+  "原始证据使用另一种语言；这里保留其类型、时间与支持度。":
+    "The source evidence uses another language; its type, time, and support level are preserved here.",
 };
 
 function interpolate(template: string, values?: Record<string, string | number>) {
@@ -620,6 +622,16 @@ export function useI18n(): I18nValue {
   const value = useContext(I18nContext);
   if (!value) throw new Error("useI18n must be used inside I18nProvider");
   return value;
+}
+
+export function matchesUiLanguage(
+  text: string,
+  locale: UiLocale,
+): boolean {
+  const cjk = (text.match(/[\u3400-\u9fff]/g) || []).length;
+  const latin = (text.match(/[A-Za-z]/g) || []).length;
+  if (locale === "en") return cjk === 0;
+  return cjk >= 2 && !(latin >= 18 && latin > cjk * 2);
 }
 
 export function LanguageSwitcher({ compact = false }: { compact?: boolean }) {

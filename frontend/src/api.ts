@@ -231,6 +231,7 @@ export const api = {
     options: {
       force?: boolean;
       strategy?: TeachingGuideStrategy;
+      output_language?: "zh" | "en";
     } = {},
   ) =>
     request<TeachingGuideResponse>(
@@ -241,6 +242,7 @@ export const api = {
         body: JSON.stringify({
           force: options.force ?? false,
           strategy: options.strategy ?? "model",
+          output_language: options.output_language ?? "zh",
         }),
       },
     ),

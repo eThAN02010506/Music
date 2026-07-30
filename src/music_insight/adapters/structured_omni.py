@@ -292,7 +292,10 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
                 response_format=teaching_chat_response_format(),
             )
             payload = await self._chat_json(request, timeout=300.0)
-        return parse_teaching_chat_response(payload)
+        return parse_teaching_chat_response(
+            payload,
+            output_language=context.output_language,
+        )
 
     async def listen_to_excerpts(
         self,
@@ -309,6 +312,7 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
                 question=request.question,
                 excerpts=excerpts,
                 language=request.language,
+                output_language=request.output_language,
                 response_format=relisten_response_format(
                     excerpt_count=len(excerpts)
                 ),

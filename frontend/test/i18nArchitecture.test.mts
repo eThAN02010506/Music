@@ -17,6 +17,14 @@ const workspaceSource = readFileSync(
   ),
   "utf8",
 );
+const understandingMapSource = readFileSync(
+  new URL("../src/features/teaching/UnderstandingMap.tsx", import.meta.url),
+  "utf8",
+);
+const chatAnswerSource = readFileSync(
+  new URL("../src/features/chat/ChatAnswer.tsx", import.meta.url),
+  "utf8",
+);
 
 test("the interface locale is global, persistent, and reflected in document language", () => {
   assert.match(mainSource, /<I18nProvider>/);
@@ -29,4 +37,10 @@ test("the topbar exposes a two-language switch with pressed state", () => {
   assert.match(workspaceSource, /<LanguageSwitcher compact \/>/);
   assert.match(i18nSource, /aria-pressed=\{locale === "zh-CN"\}/);
   assert.match(i18nSource, /aria-pressed=\{locale === "en"\}/);
+});
+
+test("teacher evidence avoids displaying prose in the wrong UI language", () => {
+  assert.match(i18nSource, /export function matchesUiLanguage/);
+  assert.match(understandingMapSource, /matchesUiLanguage\(evidence\.statement, locale\)/);
+  assert.match(chatAnswerSource, /matchesUiLanguage\(evidence\.statement, locale\)/);
 });

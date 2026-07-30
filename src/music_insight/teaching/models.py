@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from itertools import pairwise
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -157,7 +157,8 @@ class KeyMoment(TeachingModel):
 
 
 class MusicUnderstandingMap(TeachingModel):
-    schema_version: int = Field(default=2, ge=1, le=2)
+    schema_version: int = Field(default=3, ge=1, le=3)
+    output_language: Literal["zh", "en"] = "zh"
     core_expression: str = Field(min_length=1, max_length=1000)
     overall_atmosphere: str = Field(min_length=1, max_length=1600)
     emotional_arc: list[EmotionalArcPoint] = Field(
@@ -283,6 +284,7 @@ class RelistenRequest(TeachingModel):
     question: str = Field(min_length=1, max_length=4000)
     ranges: list[TeachingTimeSpan] = Field(min_length=1, max_length=2)
     language: str | None = Field(default=None, max_length=32)
+    output_language: Literal["zh", "en"] = "zh"
 
     @field_validator("ranges")
     @classmethod
@@ -333,6 +335,7 @@ class TeachingChatContext(TeachingModel):
         default_factory=VocalPresenceResult
     )
     duration_s: float = Field(gt=0)
+    output_language: Literal["zh", "en"] = "zh"
 
 
 class AnswerTimeRange(TeachingModel):
@@ -400,6 +403,7 @@ class PlayerAction(TeachingModel):
 
 
 class TeachingChatResponse(TeachingModel):
+    output_language: Literal["zh", "en"] = "zh"
     answer: str = Field(min_length=1, max_length=12000)
     time_ranges: list[AnswerTimeRange] = Field(min_length=1, max_length=8)
     evidence: list[AnswerEvidence] = Field(default_factory=list, max_length=20)
@@ -458,4 +462,5 @@ class MapGenerationContext(TeachingModel):
     result: AnalysisResult
     duration_s: float = Field(gt=0)
     language: str | None = Field(default=None, max_length=32)
+    output_language: Literal["zh", "en"] = "zh"
     listener_profile: ListenerProfile

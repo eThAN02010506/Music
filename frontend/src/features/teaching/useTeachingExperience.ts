@@ -7,6 +7,7 @@ import type {
   TeachingGuideResponse,
   TeachingGuideStrategy,
 } from "../../types";
+import { useI18n } from "../../i18n";
 
 const DEFAULT_PROFILE: ListenerProfile = {
   level: "beginner",
@@ -19,9 +20,12 @@ const GUIDE_POLL_MS = 2_000;
 export interface TeachingGenerationOptions {
   force?: boolean;
   strategy?: TeachingGuideStrategy;
+  output_language?: "zh" | "en";
 }
 
 export function useTeachingExperience(historyId: string | null) {
+  const { locale } = useI18n();
+  const outputLanguage = locale === "en" ? "en" : "zh";
   const [guide, setGuide] = useState<TeachingGuideResponse | null>(null);
   const [profile, setProfile] = useState<ListenerProfile>(DEFAULT_PROFILE);
   const [loading, setLoading] = useState(false);
@@ -57,7 +61,7 @@ export function useTeachingExperience(historyId: string | null) {
         void refreshGuide();
       }, GUIDE_POLL_MS);
     };
-    const bootstrapEvidenceGuide = async () => {
+    const bootstrapEvidenceGuide = async (force = false) => {
       if (!current()) return;
       if (generatingRef.current) {
         schedulePoll();
@@ -70,6 +74,8 @@ export function useTeachingExperience(historyId: string | null) {
       try {
         const next = await api.generateTeachingGuide(historyId, {
           strategy: "evidence",
+          force,
+          output_language: outputLanguage,
         });
         if (current()) setGuide(next);
       } catch (cause) {
@@ -99,6 +105,13 @@ export function useTeachingExperience(historyId: string | null) {
         setError("");
         if (next.status === "pending") {
           schedulePoll();
+        } else if (next.stale) {
+          await bootstrapEvidenceGuide(true);
+        } else if (
+          next.understanding_map
+          && next.understanding_map.output_language !== outputLanguage
+        ) {
+          await bootstrapEvidenceGuide(true);
         } else if (!next.understanding_map) {
           await bootstrapEvidenceGuide();
         }
@@ -134,7 +147,7 @@ export function useTeachingExperience(historyId: string | null) {
       controller.abort();
       if (pollTimer !== null) clearTimeout(pollTimer);
     };
-  }, [historyId]);
+  }, [historyId, outputLanguage]);
 
   const generate = useCallback(async (
     options: TeachingGenerationOptions = {},
@@ -146,7 +159,10 @@ export function useTeachingExperience(historyId: string | null) {
     setGenerating(true);
     setError("");
     try {
-      const next = await api.generateTeachingGuide(historyId, options);
+      const next = await api.generateTeachingGuide(historyId, {
+        ...options,
+        output_language: outputLanguage,
+      });
       if (generation === generationRef.current) setGuide(next);
       return next;
     } catch (cause) {
@@ -160,7 +176,7 @@ export function useTeachingExperience(historyId: string | null) {
         if (generation === generationRef.current) setGenerating(false);
       }
     }
-  }, [historyId]);
+  }, [historyId, outputLanguage]);
 
   const updateLevel = useCallback(async (level: ListenerLevel) => {
     const next = await api.updateListenerProfile(

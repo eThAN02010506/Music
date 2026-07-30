@@ -13,7 +13,10 @@ export interface FailedSongConversationSend {
   error: string;
 }
 
-export function useSongConversation(historyId: string | null) {
+export function useSongConversation(
+  historyId: string | null,
+  outputLanguage: "zh" | "en",
+) {
   const [conversations, setConversations] = useState<TeachingConversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(
     null,
@@ -95,7 +98,11 @@ export function useSongConversation(historyId: string | null) {
         if (
           generation === generationRef.current
           && messagesGeneration === messagesGenerationRef.current
-        ) setMessages(items);
+        ) {
+          setMessages(items.filter(
+            (item) => item.request.output_language === outputLanguage,
+          ));
+        }
       })
       .catch((cause: unknown) => {
         if (
@@ -114,7 +121,7 @@ export function useSongConversation(historyId: string | null) {
         ) setLoading(false);
       });
     return () => controller.abort();
-  }, [activeConversationId, historyId]);
+  }, [activeConversationId, historyId, outputLanguage]);
 
   const createConversation = useCallback(async () => {
     if (!historyId) return null;

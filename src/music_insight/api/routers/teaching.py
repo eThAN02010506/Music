@@ -127,6 +127,7 @@ async def create_teaching_guide(
             history_id=history_id,
             user_id=user.id,
             force=options.force,
+            output_language=options.output_language,
             model=None,
         )
     runtime = await resolve_teaching_runtime(
@@ -146,6 +147,7 @@ async def create_teaching_guide(
             history_id=history_id,
             user_id=user.id,
             force=options.force,
+            output_language=options.output_language,
             model=runtime_model,
         )
 

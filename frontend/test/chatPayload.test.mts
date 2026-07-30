@@ -79,7 +79,20 @@ test("current-time chat does not send client-derived evidence", () => {
     selected_range: null,
     compare_ranges: [],
     relisten_policy: "auto",
+    output_language: "zh",
   });
+});
+
+test("chat sends the active interface language as an output contract", () => {
+  const request = buildTeachingChatRequest({
+    message: "What changes here?",
+    snapshot,
+    mode: "current",
+    requestId: "request-language",
+    outputLanguage: "en",
+  });
+
+  assert.equal(request.output_language, "en");
 });
 
 test("selection and A/B modes carry only their requested time ranges", () => {

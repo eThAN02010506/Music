@@ -233,6 +233,48 @@ def validate_understanding_map(
         issues.append(
             "high-confidence map overview has no traceable event or arc evidence"
         )
+    _validate_generated_language(
+        [
+            understanding_map.core_expression,
+            understanding_map.overall_atmosphere,
+            *(
+                point.description
+                for point in understanding_map.emotional_arc
+            ),
+            *(
+                value
+                for section in understanding_map.sections
+                for value in (
+                    section.label,
+                    section.expressive_role,
+                    *section.alternative_labels,
+                )
+            ),
+            *(
+                value
+                for event in understanding_map.events
+                for value in (
+                    event.observation,
+                    event.interpretation,
+                    event.expressive_role,
+                    event.listening_task,
+                    *event.alternative_readings,
+                )
+            ),
+            *(
+                value
+                for moment in understanding_map.key_moments
+                for value in (
+                    moment.reason,
+                    moment.listening_task,
+                )
+            ),
+            *understanding_map.warnings,
+        ],
+        output_language=understanding_map.output_language,
+        subject="map",
+        issues=issues,
+    )
     if issues:
         raise GroundingError(issues)
 
@@ -422,8 +464,56 @@ def validate_chat_response(
         for source_id in evidence.source_refs
     ) and not response.relistened:
         issues.append("answer cites relisten evidence but relistened is false")
+    _validate_generated_language(
+        [
+            response.answer,
+            *(
+                value
+                for time_range in response.time_ranges
+                for value in (time_range.label, time_range.purpose)
+            ),
+            response.listening_task.instruction,
+            *(action.label for action in response.player_actions),
+            *response.suggested_questions,
+            *response.alternative_readings,
+            *response.warnings,
+        ],
+        output_language=response.output_language,
+        subject="answer",
+        issues=issues,
+    )
     if issues:
         raise GroundingError(issues)
+
+
+def _validate_generated_language(
+    values,
+    *,
+    output_language: str,
+    subject: str,
+    issues: list[str],
+) -> None:
+    """Reject explanatory prose that visibly conflicts with the UI locale."""
+
+    for index, value in enumerate(values):
+        text = str(value).strip()
+        if not text:
+            continue
+        cjk = len(re.findall(r"[\u3400-\u9fff]", text))
+        latin = len(re.findall(r"[A-Za-z]", text))
+        if output_language == "en":
+            mismatch = cjk > 0
+        else:
+            mismatch = cjk < 2 or (
+                latin >= 18 and latin > cjk * 2
+            )
+        if mismatch:
+            issues.append(
+                f"{subject} field {index} does not match output language "
+                f"{output_language}"
+            )
+            if len(issues) >= 8:
+                return
 
 
 def _chat_source_catalog(context: TeachingChatContext) -> dict[str, SourceFact]:

@@ -44,12 +44,14 @@ export function buildTeachingChatRequest({
   mode,
   relistenPolicy = "auto",
   requestId,
+  outputLanguage = "zh",
 }: {
   message: string;
   snapshot: PlayerSnapshot;
   mode: ChatRangeMode;
   relistenPolicy?: TeachingChatRequest["relisten_policy"];
   requestId: string;
+  outputLanguage?: "zh" | "en";
 }): TeachingChatRequest {
   const selected = mode === "selection" ? snapshot.selectedRange : null;
   const compare = (
@@ -64,5 +66,6 @@ export function buildTeachingChatRequest({
     selected_range: selected,
     compare_ranges: compare,
     relisten_policy: relistenPolicy,
+    output_language: outputLanguage,
   };
 }

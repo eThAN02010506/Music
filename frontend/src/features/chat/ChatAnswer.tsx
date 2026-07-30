@@ -1,5 +1,5 @@
 import { percent } from "../../format";
-import { useI18n } from "../../i18n";
+import { matchesUiLanguage, useI18n } from "../../i18n";
 import type {
   AnswerTimeRange,
   TeachingChatResponse,
@@ -53,7 +53,7 @@ export function ChatAnswer({
   response: TeachingChatResponse;
   onSuggestedQuestion: (question: string) => void;
 }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const player = usePlayer();
   const listeningRange = findRange(
     response,
@@ -104,7 +104,11 @@ export function ChatAnswer({
                   </span>
                   <strong>{t(DIMENSION_LABELS[evidence.dimension])}</strong>
                 </div>
-                <p>{evidence.statement}</p>
+                <p>
+                  {matchesUiLanguage(evidence.statement, locale)
+                    ? evidence.statement
+                    : t("原始证据使用另一种语言；这里保留其类型、时间与支持度。")}
+                </p>
                 {ranges.length > 0 && (
                   <div className="answer-evidence-ranges">
                     {ranges.map((range) => (

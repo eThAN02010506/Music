@@ -27,6 +27,7 @@ class TeachingGuideStatus(StrEnum):
 class TeachingGuideGenerateRequest(TeachingModel):
     force: bool = False
     strategy: Literal["evidence", "model"] = "model"
+    output_language: Literal["zh", "en"] = "zh"
 
 
 class TeachingGuideResponse(TeachingModel):
@@ -87,6 +88,7 @@ class TeachingChatRequest(TeachingModel):
         max_length=2,
     )
     relisten_policy: RelistenPolicy = RelistenPolicy.AUTO
+    output_language: Literal["zh", "en"] = "zh"
 
     @model_validator(mode="after")
     def validate_ranges(self) -> Self:

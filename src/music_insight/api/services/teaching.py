@@ -60,7 +60,7 @@ from music_insight.teaching.retrieval import (
 from music_insight.schemas import AnalysisResult
 
 
-TEACHING_SCHEMA_VERSION = 2
+TEACHING_SCHEMA_VERSION = 3
 TEACHING_PENDING_LEASE = timedelta(minutes=30)
 
 
@@ -107,6 +107,7 @@ async def generate_teaching_guide(
     history_id: str,
     user_id: str,
     force: bool = False,
+    output_language: str = "zh",
     model: TeachingModelAdapter | None = None,
 ) -> TeachingGuideResponse:
     entry = await run_in_threadpool(require_history, history, history_id, user_id)
@@ -120,7 +121,21 @@ async def generate_teaching_guide(
         "source_result_hash": source_hash,
         "stale_before": datetime.now(UTC) - TEACHING_PENDING_LEASE,
     }
-    if force:
+    existing_record = await run_in_threadpool(
+        repository.get_understanding_map,
+        history_id,
+        user_id=user_id,
+    )
+    existing_payload = (
+        existing_record.get("map_payload")
+        if existing_record is not None
+        else None
+    )
+    language_changed = (
+        isinstance(existing_payload, Mapping)
+        and existing_payload.get("output_language") != output_language
+    )
+    if force or language_changed:
         reserve_options["force"] = True
     record, cached_response = await _reserve_guide_generation(
         repository,
@@ -143,6 +158,7 @@ async def generate_teaching_guide(
             result=entry.result,
             duration_s=duration_s,
             language=entry.language,
+            output_language=output_language,
             listener_profile=profile_from_record(profile_record),
         )
         understanding_map, generation_warning = await _build_understanding_map(
@@ -297,8 +313,13 @@ async def _build_understanding_map(
             )
         except Exception as exc:
             generation_warning = (
-                "统一模型导赏输出未通过证据校验，已使用保守地图："
-                f"{_bounded_error(exc, 500)}"
+                _localized(
+                    context.output_language,
+                    "The model guide failed evidence or language validation; "
+                    "a conservative guide is shown: ",
+                    "统一模型导赏输出未通过证据或语言校验，已使用保守地图：",
+                )
+                + _bounded_error(exc, 500)
             )
             understanding_map = await fallback.build_understanding_map(context)
     if generation_warning:
@@ -306,7 +327,12 @@ async def _build_understanding_map(
             update={
                 "warnings": [
                     *understanding_map.warnings[:18],
-                    generation_warning,
+                    _localized(
+                        context.output_language,
+                        "The model guide did not pass evidence or language "
+                        "validation, so this conservative guide is shown.",
+                        "统一模型导赏未通过证据或语言校验，当前显示保守导赏。",
+                    ),
                 ]
             }
         )
@@ -475,6 +501,7 @@ async def answer_music_question(
         history_id=history_id,
         user_id=user_id,
         result=entry.result,
+        output_language=payload.output_language,
         model=model,
     )
     reserved, existing = await _reserve_chat_message(
@@ -509,6 +536,7 @@ async def answer_music_question(
                 user_id=user_id,
                 question=payload.message,
                 language=entry.language,
+                output_language=payload.output_language,
                 context=context,
                 targets=targets,
             )
@@ -570,6 +598,7 @@ async def _load_understanding_map(
     history_id: str,
     user_id: str,
     result: AnalysisResult,
+    output_language: str,
     model: TeachingModelAdapter | None,
 ) -> MusicUnderstandingMap:
     source_hash = analysis_result_hash(result)
@@ -585,6 +614,7 @@ async def _load_understanding_map(
         and map_record.get("schema_version") == TEACHING_SCHEMA_VERSION
         and map_record.get("source_result_hash") == source_hash
         and map_record.get("map_payload") is not None
+        and map_record["map_payload"].get("output_language") == output_language
     )
     if usable_map:
         return MusicUnderstandingMap.model_validate(map_record["map_payload"])
@@ -593,6 +623,8 @@ async def _load_understanding_map(
         repository=repository,
         history_id=history_id,
         user_id=user_id,
+        force=True,
+        output_language=output_language,
         model=model,
     )
     if guide.understanding_map is None:
@@ -722,6 +754,7 @@ async def _prepare_chat_context(
         analysis_summary=entry.result.summary[:4000],
         vocal_presence=entry.result.vocal_presence,
         duration_s=duration_s,
+        output_language=payload.output_language,
     )
     return context, targets
 
@@ -739,11 +772,13 @@ async def _answer_chat_context(
         try:
             response = await model.answer_music_question(context)
             validate_chat_response(response, context=context)
-        except Exception as exc:
+        except Exception:
             response = await fallback.answer_music_question(context)
-            warning = (
-                "统一模型回答未通过证据校验，已使用保守回答："
-                f"{_bounded_error(exc, 400)}"
+            warning = _localized(
+                context.output_language,
+                "The model answer did not pass evidence or language "
+                "validation, so this conservative answer is shown.",
+                "统一模型回答未通过证据或语言校验，当前显示保守回答。",
             )
             response = response.model_copy(
                 update={"warnings": [*response.warnings[:8], warning]}
@@ -789,18 +824,27 @@ async def _relisten(
     user_id: str,
     question: str,
     language: str | None,
+    output_language: str,
     context: TeachingChatContext,
     targets: list[TeachingTimeSpan],
 ) -> tuple[TeachingChatContext, str | None]:
     if provider is None:
-        return context, "当前模型未提供局部重听能力，本次只使用已保存证据回答。"
+        return context, _localized(
+            output_language,
+            "The current model cannot re-listen to excerpts; this answer uses saved evidence.",
+            "当前模型未提供局部重听能力，本次只使用已保存证据回答。",
+        )
     audio_path = await run_in_threadpool(
         history.audio_path,
         history_id,
         user_id=user_id,
     )
     if audio_path is None:
-        return context, "找不到缓存音频，本次没有进行局部重听。"
+        return context, _localized(
+            output_language,
+            "The cached audio was not found, so no excerpt was re-listened to.",
+            "找不到缓存音频，本次没有进行局部重听。",
+        )
     ranges = [
         _bounded_clip(span, duration_s=context.duration_s)
         for span in targets[:2]
@@ -813,15 +857,25 @@ async def _relisten(
                 question=question,
                 ranges=ranges,
                 language=language,
+                output_language=output_language,
             )
         )
     except Exception as exc:
         return (
             context,
-            f"局部重听失败，已使用原有证据回答：{_bounded_error(exc, 300)}",
+            _localized(
+                output_language,
+                "Excerpt re-listening failed; saved evidence was used: ",
+                "局部重听失败，已使用原有证据回答：",
+            )
+            + _bounded_error(exc, 300),
         )
     if not relisten.evidence:
-        return context, "局部重听没有返回可确认的新增听觉事实。"
+        return context, _localized(
+            output_language,
+            "Excerpt re-listening returned no new verifiable audible fact.",
+            "局部重听没有返回可确认的新增听觉事实。",
+        )
     return (
         context.model_copy(update={"relisten_evidence": relisten.evidence}),
         "；".join(relisten.warnings[:3]) if relisten.warnings else None,
@@ -1049,6 +1103,10 @@ async def _fail_message_reservation(
 
 def _bounded_error(error: BaseException, limit: int) -> str:
     return (str(error).strip() or error.__class__.__name__)[:limit]
+
+
+def _localized(language: str, english: str, chinese: str) -> str:
+    return english if language == "en" else chinese
 
 
 def _datetime_or_none(value: Any) -> datetime | None:

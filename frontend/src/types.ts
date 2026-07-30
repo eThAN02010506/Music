@@ -310,6 +310,7 @@ export interface KeyMoment {
 
 export interface MusicUnderstandingMap {
   schema_version: number;
+  output_language: "zh" | "en";
   core_expression: string;
   overall_atmosphere: string;
   emotional_arc: EmotionalArcPoint[];
@@ -353,6 +354,7 @@ export interface TeachingPlayerAction {
 }
 
 export interface TeachingChatResponse {
+  output_language: "zh" | "en";
   answer: string;
   time_ranges: AnswerTimeRange[];
   evidence: AnswerEvidence[];
@@ -409,6 +411,7 @@ export interface TeachingChatRequest {
   selected_range: Span | null;
   compare_ranges: Span[];
   relisten_policy: "never" | "auto" | "always";
+  output_language: "zh" | "en";
 }
 
 export interface TeachingMessage {
