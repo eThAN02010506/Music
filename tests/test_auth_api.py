@@ -117,6 +117,15 @@ def test_leaderboard_uses_server_records_and_hides_user_ids(tmp_path):
         accounts.record_score(first["id"], _score(82), source="history")
         accounts.record_score(first["id"], _score(93), source="standalone")
         accounts.record_score(second["id"], _score(88), source="history")
+        assert first_client.get("/leaderboard").json()["entries"] == []
+        assert first_client.patch(
+            "/auth/me",
+            json={"leaderboard_visible": True},
+        ).json()["leaderboard_visible"] is True
+        assert second_client.patch(
+            "/auth/me",
+            json={"leaderboard_visible": True},
+        ).json()["leaderboard_visible"] is True
 
         response = first_client.get("/leaderboard")
         assert response.status_code == 200

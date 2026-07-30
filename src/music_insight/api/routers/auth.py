@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from music_insight.api.accounts import (
@@ -26,6 +27,10 @@ from music_insight.api.services.auth import (
 
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+
+
+class AccountPreferencesUpdate(BaseModel):
+    leaderboard_visible: bool
 
 
 @router.post("/register", response_model=UserPublic, status_code=201)
@@ -107,6 +112,22 @@ async def current_account(
     user: UserPublic = Depends(get_current_user),
 ) -> UserPublic:
     return user
+
+
+@router.patch("/me", response_model=UserPublic)
+async def update_current_account(
+    payload: AccountPreferencesUpdate,
+    accounts: AccountStore = Depends(get_account_store),
+    user: UserPublic = Depends(get_current_user),
+) -> UserPublic:
+    try:
+        return await run_in_threadpool(
+            accounts.set_leaderboard_visibility,
+            user.id,
+            payload.leaderboard_visible,
+        )
+    except AccountValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/claim-legacy")

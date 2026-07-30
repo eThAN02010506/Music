@@ -4,6 +4,9 @@ import asyncio
 import json
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+import httpcore
+import httpx
+from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 
 from music_insight.api.accounts import UserPublic
@@ -30,11 +33,24 @@ from music_insight.api.services.analysis import (
     analyze_upload_markdown,
     submit_analysis_job,
 )
+from music_insight.api.services.remote_audio import (
+    RemoteAudioError,
+    download_remote_audio,
+    remote_audio_http_exception,
+)
 from music_insight.config import Settings, get_settings
 from music_insight.schemas import AnalysisResult
 
 
 router = APIRouter(tags=["analysis"])
+
+
+class RemoteAudioJobRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+    language: str | None = None
+    model_source: str = "network"
+    model_endpoint: str | None = None
+    local_model_path: str | None = None
 
 
 @router.post("/jobs", response_model=JobSnapshot, status_code=202)
@@ -75,6 +91,71 @@ async def create_job(
             orchestrator=orchestrator,
             task_queue=getattr(request.app.state, "task_queue", None),
         )
+
+
+@router.post("/jobs/from-url", response_model=JobSnapshot, status_code=202)
+async def create_job_from_url(
+    payload: RemoteAudioJobRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    history: HistoryStore = Depends(get_history_store),
+    jobs: AnalysisJobStore = Depends(get_job_store),
+    user: UserPublic = Depends(get_current_user),
+) -> JobSnapshot:
+    if payload.model_source not in {"network", "local"}:
+        raise HTTPException(status_code=422, detail="Unsupported model source.")
+    if payload.language not in {None, "zh", "en"}:
+        raise HTTPException(status_code=422, detail="Unsupported language hint.")
+    orchestrator = get_orchestrator(
+        settings,
+        model_source=payload.model_source,
+        model_endpoint=payload.model_endpoint,
+        local_model_path=payload.local_model_path,
+        local_server=request.app.state.local_server,
+    )
+    async with request.app.state.direct_work_limiter.lease(user.id):
+        try:
+            async with asyncio.timeout(
+                settings.remote_audio_timeout_seconds
+            ):
+                upload = await download_remote_audio(
+                    payload.url,
+                    max_bytes=settings.max_upload_mb * 1024 * 1024,
+                    timeout_seconds=settings.remote_audio_timeout_seconds,
+                    max_redirects=settings.remote_audio_max_redirects,
+                )
+        except TimeoutError as exc:
+            raise HTTPException(
+                status_code=504,
+                detail="远程音频下载超过总时间限制。",
+            ) from exc
+        except RemoteAudioError as exc:
+            raise remote_audio_http_exception(exc) from exc
+        except (
+            httpcore.NetworkError,
+            httpcore.TimeoutException,
+            httpx.HTTPError,
+        ) as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="无法安全读取远程音频。",
+            ) from exc
+        try:
+            return await submit_analysis_job(
+                file=upload,
+                language=payload.language,
+                model_source=payload.model_source,
+                model_endpoint=payload.model_endpoint,
+                local_model_path=payload.local_model_path,
+                settings=settings,
+                history=history,
+                jobs=jobs,
+                user_id=user.id,
+                orchestrator=orchestrator,
+                task_queue=getattr(request.app.state, "task_queue", None),
+            )
+        finally:
+            await upload.close()
 
 
 async def _job_or_404(

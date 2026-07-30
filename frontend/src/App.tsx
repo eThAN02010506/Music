@@ -33,7 +33,7 @@ export default function App() {
     try {
       const next = await api.authMe();
       if (!authRequestsRef.current.isCurrent(requestId)) return;
-      setUser((current) => current?.id === next.id ? current : next);
+      setUser(next);
       setAuthNotice("");
     } catch (cause) {
       if (!authRequestsRef.current.isCurrent(requestId)) return;
@@ -116,6 +116,7 @@ export default function App() {
       key={user.id}
       user={user}
       health={health}
+      onUserUpdated={setUser}
       onLoggedOut={() => {
         authRequestsRef.current.invalidate();
         setAuthNotice("已安全退出本地账号。");

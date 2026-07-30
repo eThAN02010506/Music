@@ -55,6 +55,7 @@ export const initialWorkspaceState: WorkspaceState = {
 
 export type WorkspaceAction =
   | { type: "file-chosen"; file: File }
+  | { type: "remote-chosen"; fileName: string }
   | { type: "new-analysis" }
   | { type: "analysis-started" }
   | { type: "job-created"; snapshot: JobSnapshot }
@@ -169,10 +170,24 @@ export function workspaceReducer(
         result: null,
         error: "",
       };
+    case "remote-chosen":
+      return {
+        view: {
+          kind: "start",
+          file: null,
+          fileName: action.fileName,
+          historyId: null,
+          revisionCount: 0,
+        },
+        pendingNavigation: null,
+        job: null,
+        result: null,
+        error: "",
+      };
     case "new-analysis":
       return resetState();
     case "analysis-started":
-      if (state.view.kind !== "start" || !state.view.file) return state;
+      if (state.view.kind !== "start" || !state.view.fileName) return state;
       return {
         ...state,
         view: {
@@ -186,7 +201,7 @@ export function workspaceReducer(
         error: "",
       };
     case "job-created":
-      if (state.view.kind !== "start" || !state.view.file) return state;
+      if (state.view.kind !== "start" || !state.view.fileName) return state;
       return {
         ...state,
         view: {

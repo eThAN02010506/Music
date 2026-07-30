@@ -7,6 +7,7 @@ import { useObjectUrl } from "../../hooks/useObjectUrl";
 import type {
   LeaderboardEntry,
   SingingScore,
+  User,
 } from "../../types";
 import { historyTime } from "../history/HistoryViews";
 
@@ -36,7 +37,9 @@ export function SingingScoreResult({ score }: { score: SingingScore }) {
             : errorValue <= 0.5 ? "good"
             : errorValue <= 1.5 ? "medium" : "bad";
           return <span key={index} className={level} title={
-            errorValue == null ? "无可比音高" : `偏差 ${errorValue} 半音`
+            errorValue == null
+              ? "无可比音高"
+              : `${seconds(point.reference_time_s)} · 偏差 ${errorValue} 半音`
           } />;
         })}
       </div>
@@ -48,6 +51,20 @@ export function SingingScoreResult({ score }: { score: SingingScore }) {
       <p className="score-summary">
         参考 {seconds(score.reference_duration_s)} · 演唱 {seconds(score.performance_duration_s)}
       </p>
+      {score.practice_moments.length > 0 && (
+        <div className="singing-practice-moments">
+          <strong>优先练习的时间段</strong>
+          {score.practice_moments.map((moment) => (
+            <article key={`${moment.start_s}-${moment.end_s}`}>
+              <time>
+                {seconds(moment.start_s)}–{seconds(moment.end_s)}
+              </time>
+              <span>{moment.observation}</span>
+              <small>{moment.listening_task}</small>
+            </article>
+          ))}
+        </div>
+      )}
       {score.notes.map((note) => <p className="score-note" key={note}>{note}</p>)}
     </div>
   );
@@ -328,30 +345,56 @@ function leaderboardSource(source: string) {
 }
 
 export function LeaderboardPanel({
+  user,
+  onUserUpdated,
   onClose,
 }: {
+  user: User;
+  onUserUpdated: (user: User) => void;
   onClose: () => void;
 }) {
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [updatingVisibility, setUpdatingVisibility] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    const controller = new AbortController();
-    api.leaderboard(controller.signal)
+  const loadBoard = useCallback((signal?: AbortSignal) => {
+    setLoading(true);
+    setError("");
+    return api.leaderboard(signal)
       .then((next) => {
-        if (!controller.signal.aborted) setEntries(next.entries);
+        if (!signal?.aborted) setEntries(next.entries);
       })
       .catch((cause) => {
-        if (!isAbortError(cause)) {
+        if (!signal?.aborted && !isAbortError(cause)) {
           setError(cause instanceof Error ? cause.message : "排行榜加载失败");
         }
       })
       .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
+        if (!signal?.aborted) setLoading(false);
       });
-    return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadBoard(controller.signal);
+    return () => controller.abort();
+  }, [loadBoard]);
+
+  const changeVisibility = async (visible: boolean) => {
+    if (updatingVisibility) return;
+    setUpdatingVisibility(true);
+    setError("");
+    try {
+      const updated = await api.updateLeaderboardVisibility(visible);
+      onUserUpdated(updated);
+      await loadBoard();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "排行榜隐私设置失败");
+    } finally {
+      setUpdatingVisibility(false);
+    }
+  };
 
   return (
     <ModalDialog
@@ -369,6 +412,18 @@ export function LeaderboardPanel({
       <p className="leaderboard-rule">
         娱乐最高分榜，每人仅取最高分；不同参考音频仅供娱乐。
       </p>
+      <label className="leaderboard-privacy">
+        <input
+          type="checkbox"
+          checked={user.leaderboard_visible}
+          disabled={updatingVisibility}
+          onChange={(event) => void changeVisibility(event.target.checked)}
+        />
+        <span>
+          <strong>把我的最高分加入排行榜</strong>
+          <small>默认不公开；关闭后会立即从其他用户可见的榜单移除。</small>
+        </span>
+      </label>
       {loading ? (
         <div className="leaderboard-state" role="status">正在汇总最高成绩…</div>
       ) : error ? (

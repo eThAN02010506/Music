@@ -12,11 +12,18 @@ class Settings(BaseSettings):
     workspace_dir: Path = Field(default=Path(".music_insight"))
     max_upload_mb: int = Field(default=128, ge=1, le=1024)
     max_audio_minutes: float = Field(default=20.0, ge=1, le=180)
+    remote_audio_timeout_seconds: float = Field(default=120.0, ge=10, le=600)
+    remote_audio_max_redirects: int = Field(default=3, ge=0, le=5)
     asset_gc_grace_hours: float = Field(default=24.0, ge=0)
     max_active_jobs: int = Field(default=8, ge=1, le=64)
     max_active_jobs_per_user: int = Field(default=3, ge=1, le=16)
     max_direct_work: int = Field(default=2, ge=1, le=16)
     max_direct_work_per_user: int = Field(default=1, ge=1, le=8)
+    direct_work_lease_ttl_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=24 * 60 * 60,
+    )
     # A singing comparison carries two independently bounded files.
     max_upload_units: int = Field(default=2, ge=2, le=16)
     auth_kdf_max_concurrency: int = Field(default=4, ge=1, le=16)

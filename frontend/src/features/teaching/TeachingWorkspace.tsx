@@ -17,6 +17,7 @@ export function TeachingWorkspace({
   error,
   onGenerate,
   onLevelChange,
+  onConceptToggle,
 }: {
   historyId: string | null;
   guide: TeachingGuideResponse | null;
@@ -26,6 +27,7 @@ export function TeachingWorkspace({
   error: string;
   onGenerate: (options?: TeachingGenerationOptions) => Promise<unknown>;
   onLevelChange: (level: ListenerLevel) => Promise<void>;
+  onConceptToggle: (concept: string) => Promise<void>;
 }) {
   if (!historyId) {
     return (
@@ -128,6 +130,10 @@ export function TeachingWorkspace({
         </div>
       )}
       <TeachingOverview map={map} />
+      <LearningProgress
+        profile={profile}
+        onConceptToggle={onConceptToggle}
+      />
       <div className="teaching-main-grid">
         <ListeningChat
           historyId={historyId}
@@ -138,5 +144,57 @@ export function TeachingWorkspace({
         <UnderstandingMap map={map} />
       </div>
     </div>
+  );
+}
+
+const TRAINING_CONCEPTS = [
+  "段落结构",
+  "节奏与律动",
+  "旋律走向",
+  "和声色彩",
+  "音色",
+  "力度变化",
+  "配器层次",
+  "空间感",
+  "歌词与音乐关系",
+];
+
+function LearningProgress({
+  profile,
+  onConceptToggle,
+}: {
+  profile: ListenerProfile;
+  onConceptToggle: (concept: string) => Promise<void>;
+}) {
+  const learned = new Set(profile.learned_concepts);
+  const nextConcept = TRAINING_CONCEPTS.find((concept) => !learned.has(concept));
+  return (
+    <section className="panel learning-progress">
+      <header>
+        <div>
+          <span className="section-kicker">LISTENING PRACTICE</span>
+          <h3>我的听觉训练进度</h3>
+        </div>
+        <small>{learned.size}/{TRAINING_CONCEPTS.length} 个核心概念</small>
+      </header>
+      <p>
+        只有你确认“已经能听出”后才会记录；系统不会因为回答过一次就自动判定学会。
+        {nextConcept && ` 下一项建议关注：${nextConcept}。`}
+      </p>
+      <div className="concept-progress-list">
+        {TRAINING_CONCEPTS.map((concept) => (
+          <button
+            key={concept}
+            type="button"
+            className={learned.has(concept) ? "learned" : ""}
+            aria-pressed={learned.has(concept)}
+            onClick={() => void onConceptToggle(concept)}
+          >
+            <span aria-hidden="true">{learned.has(concept) ? "✓" : "+"}</span>
+            {concept}
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }

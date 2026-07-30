@@ -87,6 +87,12 @@ export const api = {
     request<RuntimeConfig>("/runtime-config", undefined, { signal }),
   authMe: () =>
     request<User>("/auth/me", undefined, { ignoreAuthExpiry: true }),
+  updateLeaderboardVisibility: (leaderboardVisible: boolean) =>
+    request<User>("/auth/me", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ leaderboard_visible: leaderboardVisible }),
+    }),
   register: (username: string, password: string) =>
     request<User>(
       "/auth/register",
@@ -144,6 +150,18 @@ export const api = {
     request<HistoryDetail>(`/history/${encodeURIComponent(id)}`),
   createJob: (form: FormData) =>
     request<JobSnapshot>("/jobs", { method: "POST", body: form }),
+  createJobFromUrl: (payload: {
+    url: string;
+    language: string | null;
+    model_source: "network" | "local";
+    model_endpoint: string | null;
+    local_model_path: string | null;
+  }) =>
+    request<JobSnapshot>("/jobs/from-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
   job: (id: string) =>
     request<JobSnapshot>(`/jobs/${encodeURIComponent(id)}`),
   jobResult: (id: string) =>

@@ -12,9 +12,20 @@ from music_insight.audio import decode_mono
 
 class PitchPoint(BaseModel):
     progress: float = Field(ge=0, le=1)
+    reference_time_s: float | None = Field(default=None, ge=0)
+    performance_time_s: float | None = Field(default=None, ge=0)
     reference_midi: float | None = None
     performance_midi: float | None = None
     error_semitones: float | None = None
+    signed_error_semitones: float | None = None
+
+
+class SingingPracticeMoment(BaseModel):
+    start_s: float = Field(ge=0)
+    end_s: float = Field(gt=0)
+    observation: str = Field(min_length=1, max_length=300)
+    listening_task: str = Field(min_length=1, max_length=500)
+    confidence: float = Field(ge=0, le=1)
 
 
 class SingingScore(BaseModel):
@@ -28,6 +39,10 @@ class SingingScore(BaseModel):
     reference_duration_s: float
     performance_duration_s: float
     pitch_curve: list[PitchPoint]
+    practice_moments: list[SingingPracticeMoment] = Field(
+        default_factory=list,
+        max_length=3,
+    )
     notes: list[str]
 
 
@@ -48,24 +63,36 @@ def score_singing(
     (
         reference_pitch,
         reference_onset,
-        reference_duration,
+        reference_analysis_duration,
         reference_voiced_coverage,
         _,
+        reference_offset,
+        reference_duration,
     ) = reference
     (
         performance_pitch,
         performance_onset,
-        performance_duration,
+        performance_analysis_duration,
         voiced_coverage,
         pitch_stability,
+        performance_offset,
+        performance_duration,
     ) = performance
-    duration_ratio = min(reference_duration, performance_duration) / max(
-        reference_duration, performance_duration, 1e-6
+    duration_ratio = min(
+        reference_analysis_duration,
+        performance_analysis_duration,
+    ) / max(
+        reference_analysis_duration,
+        performance_analysis_duration,
+        1e-6,
     )
     voiced_duration_ratio = min(
         1.0,
-        (voiced_coverage * performance_duration)
-        / max(reference_voiced_coverage * reference_duration, 1e-6),
+        (voiced_coverage * performance_analysis_duration)
+        / max(
+            reference_voiced_coverage * reference_analysis_duration,
+            1e-6,
+        ),
     )
     (
         pitch_points,
@@ -76,6 +103,10 @@ def score_singing(
     ) = _compare_pitch(
         reference_pitch,
         performance_pitch,
+        reference_duration=reference_analysis_duration,
+        performance_duration=performance_analysis_duration,
+        reference_offset=reference_offset,
+        performance_offset=performance_offset,
         coverage_cap=voiced_duration_ratio,
     )
     completeness = int(round(100 * (
@@ -109,6 +140,10 @@ def score_singing(
         reference_duration_s=round(reference_duration, 2),
         performance_duration_s=round(performance_duration, 2),
         pitch_curve=pitch_points,
+        practice_moments=_practice_moments(
+            pitch_points,
+            reference_duration=reference_duration,
+        ),
         notes=notes,
     )
 
@@ -126,9 +161,12 @@ def _extract_features(path: Path, *, max_duration_s: float | None = None):
     )
     if audio.size < sample_rate:
         raise ValueError("演唱音频至少需要 1 秒。")
-    trimmed, _ = librosa.effects.trim(audio, top_db=35)
+    audio_duration = len(audio) / sample_rate
+    trimmed, trim_indices = librosa.effects.trim(audio, top_db=35)
+    trim_offset = float(trim_indices[0]) / sample_rate
     if trimmed.size < sample_rate:
         trimmed = audio
+        trim_offset = 0.0
     duration = len(trimmed) / sample_rate
     hop = 512
     f0, voiced_flag, _ = librosa.pyin(
@@ -144,7 +182,15 @@ def _extract_features(path: Path, *, max_duration_s: float | None = None):
     onset = librosa.onset.onset_strength(y=trimmed, sr=sample_rate, hop_length=hop)
     voiced_coverage = float(np.mean(voiced_flag)) if voiced_flag.size else 0.0
     stability = _pitch_stability(midi)
-    return midi, onset, duration, voiced_coverage, stability
+    return (
+        midi,
+        onset,
+        duration,
+        voiced_coverage,
+        stability,
+        trim_offset,
+        audio_duration,
+    )
 
 
 def _compress_pitch(values: np.ndarray, size: int) -> np.ndarray:
@@ -180,6 +226,10 @@ def _compare_pitch(
     reference: np.ndarray,
     performance: np.ndarray,
     *,
+    reference_duration: float | None = None,
+    performance_duration: float | None = None,
+    reference_offset: float = 0.0,
+    performance_offset: float = 0.0,
     coverage_cap: float = 1.0,
 ):
     ref = _compress_pitch(reference, 600)
@@ -247,12 +297,30 @@ def _compare_pitch(
             if ref_value is not None and sung_value is not None
             else None
         )
+        signed_error = (
+            round(sung_value - ref_value, 2)
+            if ref_value is not None and sung_value is not None
+            else None
+        )
         points.append(
             PitchPoint(
                 progress=round(output_index / max(1, len(path_indices) - 1), 4),
+                reference_time_s=_index_time(
+                    int(ref_index),
+                    len(ref),
+                    reference_duration,
+                    reference_offset,
+                ),
+                performance_time_s=_index_time(
+                    int(sung_index),
+                    len(sung),
+                    performance_duration,
+                    performance_offset,
+                ),
                 reference_midi=round(ref_value, 2) if ref_value is not None else None,
                 performance_midi=round(sung_value, 2) if sung_value is not None else None,
                 error_semitones=error,
+                signed_error_semitones=signed_error,
             )
         )
     return (
@@ -262,6 +330,98 @@ def _compare_pitch(
         in_tune,
         aligned_coverage,
     )
+
+
+def _index_time(
+    index: int,
+    size: int,
+    duration: float | None,
+    offset: float = 0.0,
+) -> float | None:
+    if duration is None or size <= 0:
+        return None
+    return round(
+        float(
+            np.clip(index / max(1, size - 1) * duration, 0, duration)
+            + max(0.0, offset)
+        ),
+        2,
+    )
+
+
+def _practice_moments(
+    points: list[PitchPoint],
+    *,
+    reference_duration: float,
+) -> list[SingingPracticeMoment]:
+    """Select up to three evidence-backed windows worth practicing."""
+
+    if len(points) < 8:
+        return []
+    candidates: list[tuple[float, int, list[PitchPoint]]] = []
+    for index, bucket in enumerate(np.array_split(np.asarray(points, dtype=object), 8)):
+        values = [
+            point
+            for point in bucket.tolist()
+            if isinstance(point, PitchPoint)
+            and point.error_semitones is not None
+            and point.reference_time_s is not None
+        ]
+        errors = [point.error_semitones for point in values]
+        if len(errors) < 3:
+            continue
+        median_error = float(np.median(errors))
+        if median_error < 0.5:
+            continue
+        candidates.append((median_error, index, values))
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+
+    moments: list[SingingPracticeMoment] = []
+    for median_error, _, values in candidates[:3]:
+        times = [
+            point.reference_time_s
+            for point in values
+            if point.reference_time_s is not None
+        ]
+        signed = [
+            point.signed_error_semitones
+            for point in values
+            if point.signed_error_semitones is not None
+        ]
+        if not times:
+            continue
+        start_s = max(0.0, min(times))
+        end_s = min(
+            reference_duration,
+            max(max(times), start_s + max(1.0, reference_duration / 80)),
+        )
+        if end_s <= start_s:
+            continue
+        median_signed = float(np.median(signed)) if signed else 0.0
+        direction = (
+            "整体偏高"
+            if median_signed > 0.35
+            else "整体偏低"
+            if median_signed < -0.35
+            else "高低方向不固定"
+        )
+        confidence = min(1.0, len(values) / 10)
+        moments.append(
+            SingingPracticeMoment(
+                start_s=round(start_s, 2),
+                end_s=round(end_s, 2),
+                observation=(
+                    f"这一段音高中位偏差约 {median_error:.2f} 半音，"
+                    f"{direction}。"
+                ),
+                listening_task=(
+                    "先循环参考片段并只哼主旋律，再关闭参考独唱一次；"
+                    "第二遍重点保持起音后的音高中心。"
+                ),
+                confidence=round(confidence, 2),
+            )
+        )
+    return sorted(moments, key=lambda item: item.start_s)
 
 
 def _dtw_shape_similarity(first: np.ndarray, second: np.ndarray) -> float:

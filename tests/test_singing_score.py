@@ -2,7 +2,7 @@ import wave
 
 import numpy as np
 
-from music_insight.singing_score import score_singing
+from music_insight.singing_score import _compare_pitch, score_singing
 
 
 def _tone(path, frequency: float, seconds: float = 3.0) -> None:
@@ -51,6 +51,13 @@ def test_singing_score_rewards_matching_pitch(tmp_path):
     assert bad.median_pitch_error is not None
     assert bad.median_pitch_error >= 3.5
     assert len(good.pitch_curve) == 80
+    assert good.pitch_curve[0].reference_time_s is not None
+    assert good.pitch_curve[-1].reference_time_s == good.reference_duration_s
+    assert bad.practice_moments
+    assert all(
+        moment.start_s < moment.end_s
+        for moment in bad.practice_moments
+    )
 
 
 def test_singing_score_dtw_tolerates_consistent_time_stretch(tmp_path):
@@ -66,3 +73,22 @@ def test_singing_score_dtw_tolerates_consistent_time_stretch(tmp_path):
     assert score.median_pitch_error <= 0.5
     assert score.in_tune_ratio is not None
     assert score.in_tune_ratio >= 0.8
+
+
+def test_pitch_timeline_preserves_trimmed_leading_silence_offset():
+    reference = np.full(24, 60.0)
+    performance = np.full(24, 60.0)
+
+    points, *_ = _compare_pitch(
+        reference,
+        performance,
+        reference_duration=2.0,
+        performance_duration=2.0,
+        reference_offset=1.25,
+        performance_offset=0.75,
+    )
+
+    assert points[0].reference_time_s == 1.25
+    assert points[-1].reference_time_s == 3.25
+    assert points[0].performance_time_s == 0.75
+    assert points[-1].performance_time_s == 2.75

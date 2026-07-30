@@ -138,9 +138,19 @@ export interface SingingScore {
   performance_duration_s: number;
   pitch_curve: Array<{
     progress: number;
+    reference_time_s: number | null;
+    performance_time_s: number | null;
     reference_midi: number | null;
     performance_midi: number | null;
     error_semitones: number | null;
+    signed_error_semitones: number | null;
+  }>;
+  practice_moments: Array<{
+    start_s: number;
+    end_s: number;
+    observation: string;
+    listening_task: string;
+    confidence: number;
   }>;
   notes: string[];
 }
@@ -149,6 +159,7 @@ export interface User {
   id: string;
   username: string;
   created_at: string;
+  leaderboard_visible: boolean;
 }
 
 export interface LeaderboardEntry {

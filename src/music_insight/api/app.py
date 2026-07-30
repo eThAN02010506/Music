@@ -34,6 +34,7 @@ from music_insight.distributed.jobs import (
     DistributedJobUnavailable,
     RedisAnalysisJobStore,
 )
+from music_insight.distributed.capacity import RedisCapacityLimiter
 from music_insight.distributed.reconcile import reconcile_terminal_history
 from music_insight.pipeline.resources import model_resources
 
@@ -188,11 +189,21 @@ def create_app(
         "music-insight://local-dsp",
         settings.dsp_max_concurrency,
     )
-    api.state.direct_work_limiter = CapacityLimiter(
-        max_active=settings.max_direct_work,
-        max_active_per_owner=settings.max_direct_work_per_user,
-        label="直接分析",
-    )
+    if isinstance(api.state.jobs, RedisAnalysisJobStore):
+        api.state.direct_work_limiter = RedisCapacityLimiter(
+            api.state.jobs.client,
+            key_prefix=settings.redis_key_prefix,
+            max_active=settings.max_direct_work,
+            max_active_per_owner=settings.max_direct_work_per_user,
+            lease_ttl_seconds=settings.direct_work_lease_ttl_seconds,
+            label="直接分析",
+        )
+    else:
+        api.state.direct_work_limiter = CapacityLimiter(
+            max_active=settings.max_direct_work,
+            max_active_per_owner=settings.max_direct_work_per_user,
+            label="直接分析",
+        )
     api.state.auth_kdf_limiter = CapacityLimiter(
         max_active=settings.auth_kdf_max_concurrency,
         label="认证计算",

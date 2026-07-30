@@ -6,7 +6,7 @@ import sqlite3
 
 from music_insight.storage.assets import cached_paths
 
-LATEST_SCHEMA_VERSION = 6
+LATEST_SCHEMA_VERSION = 7
 
 
 def migration_1_history(connection: sqlite3.Connection) -> None:
@@ -481,6 +481,17 @@ def migration_6_music_teaching(connection: sqlite3.Connection) -> None:
         connection.execute(statement)
 
 
+def migration_7_leaderboard_privacy(connection: sqlite3.Connection) -> None:
+    """Make appearance in the cross-user singing board an explicit choice."""
+
+    _ensure_column(
+        connection,
+        "users",
+        "leaderboard_visible",
+        "INTEGER NOT NULL DEFAULT 0 CHECK (leaderboard_visible IN (0, 1))",
+    )
+
+
 def result_projection(
     payload: dict[str, object],
 ) -> tuple[str | None, float | None, int, str, float | None]:
@@ -587,4 +598,5 @@ MIGRATIONS: tuple[
     (4, migration_4_owner_integrity),
     (5, migration_5_asset_content_keys),
     (6, migration_6_music_teaching),
+    (7, migration_7_leaderboard_privacy),
 )

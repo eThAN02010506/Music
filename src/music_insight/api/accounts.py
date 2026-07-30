@@ -44,6 +44,7 @@ class UserPublic(BaseModel):
     id: str
     username: str
     created_at: datetime
+    leaderboard_visible: bool = False
 
 
 class AuthCredentials(BaseModel):
@@ -140,6 +141,7 @@ class AccountStore:
             id=user_id,
             username=display_name,
             created_at=created_at,
+            leaderboard_visible=False,
         )
 
     def authenticate(self, username: str, password: str) -> UserPublic | None:
@@ -225,6 +227,7 @@ class AccountStore:
                 """
                 SELECT
                     users.id, users.username, users.created_at,
+                    users.leaderboard_visible,
                     sessions.expires_at
                 FROM sessions
                 JOIN users ON users.id = sessions.user_id
@@ -381,6 +384,30 @@ class AccountStore:
             )
         return cursor.rowcount > 0
 
+    def set_leaderboard_visibility(
+        self,
+        user_id: str,
+        visible: bool,
+    ) -> UserPublic:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE users
+                SET leaderboard_visible = ?
+                WHERE id = ?
+                """,
+                (1 if visible else 0, user_id),
+            )
+            if cursor.rowcount == 0:
+                raise AccountValidationError("用户不存在。")
+            row = connection.execute(
+                "SELECT * FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+        if row is None:  # pragma: no cover - protected by the same transaction
+            raise AccountValidationError("用户不存在。")
+        return self._user(row)
+
     def leaderboard(
         self,
         *,
@@ -423,6 +450,7 @@ class AccountStore:
                 FROM ranked
                 JOIN users ON users.id = ranked.user_id
                 WHERE ranked.user_rank = 1
+                  AND users.leaderboard_visible = 1
                 ORDER BY
                     ranked.total DESC,
                     ranked.pitch DESC,
@@ -468,6 +496,7 @@ class AccountStore:
             id=row["id"],
             username=row["username"],
             created_at=datetime.fromisoformat(row["created_at"]),
+            leaderboard_visible=bool(row["leaderboard_visible"]),
         )
 
     @staticmethod

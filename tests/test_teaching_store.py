@@ -104,7 +104,7 @@ def test_v5_upgrade_adds_teaching_schema_without_losing_history(tmp_path):
         foreign_keys = connection.execute(
             "PRAGMA foreign_key_list(music_messages)"
         ).fetchall()
-    assert version == LATEST_SCHEMA_VERSION == 6
+    assert version == LATEST_SCHEMA_VERSION == 7
     assert {
         "understanding_maps",
         "listener_profiles",

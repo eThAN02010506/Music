@@ -100,6 +100,26 @@ test("new upload and created job form one coherent workspace selection", () => {
   assert.deepEqual(state, initialWorkspaceState);
 });
 
+test("remote URL jobs retain a stable name without a browser File", () => {
+  let state = workspaceReducer(initialWorkspaceState, {
+    type: "remote-chosen",
+    fileName: "remote-song.mp3",
+  });
+
+  assert.equal(selectedFile(state), null);
+  assert.equal(selectedFileName(state), "remote-song.mp3");
+
+  state = workspaceReducer(state, { type: "analysis-started" });
+  state = workspaceReducer(state, {
+    type: "job-created",
+    snapshot: job("remote-job"),
+  });
+
+  assert.equal(activeHistoryId(state), "remote-job");
+  assert.equal(selectedFileName(state), "remote-song.mp3");
+  assert.equal(state.job?.id, "remote-job");
+});
+
 test("only the latest history selection may replace the current view", () => {
   let state = workspaceReducer(initialWorkspaceState, {
     type: "navigation-started",

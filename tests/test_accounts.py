@@ -123,6 +123,8 @@ def test_personal_attempts_are_isolated_and_standalone_scores_are_ranked(tmp_pat
     store = AccountStore(tmp_path / "accounts.sqlite3")
     first = store.register("第一位", "safe password")
     second = store.register("Second", "safe password")
+    store.set_leaderboard_visibility(first.id, True)
+    store.set_leaderboard_visibility(second.id, True)
     start = datetime(2026, 7, 1, tzinfo=UTC)
     audio = tmp_path / "original.wav"
     audio.write_bytes(b"history-source")
@@ -254,6 +256,8 @@ def test_deleting_scores_promotes_personal_best_and_rebuilds_ranks(tmp_path):
     store = AccountStore(tmp_path / "accounts.sqlite3")
     first = store.register("first-board", "safe password")
     second = store.register("second-board", "safe password")
+    store.set_leaderboard_visibility(first.id, True)
+    store.set_leaderboard_visibility(second.id, True)
     start = datetime(2026, 7, 30, 10, tzinfo=UTC)
     first_lower = store.record_score(
         first.id,
@@ -307,3 +311,22 @@ def test_foreign_keys_and_input_validation_are_enabled(tmp_path):
         store.record_score("missing-user", _score(80))
     with pytest.raises(AccountValidationError):
         store.leaderboard(period="weekly")  # type: ignore[arg-type]
+
+
+def test_leaderboard_visibility_is_explicit_and_reversible(tmp_path):
+    store = AccountStore(tmp_path / "accounts.sqlite3")
+    user = store.register("private-singer", "safe password")
+    store.record_score(user.id, _score(90))
+
+    assert user.leaderboard_visible is False
+    assert store.leaderboard().entries == []
+
+    visible = store.set_leaderboard_visibility(user.id, True)
+    assert visible.leaderboard_visible is True
+    assert [entry.user_id for entry in store.leaderboard().entries] == [
+        user.id
+    ]
+
+    hidden = store.set_leaderboard_visibility(user.id, False)
+    assert hidden.leaderboard_visible is False
+    assert store.leaderboard().entries == []

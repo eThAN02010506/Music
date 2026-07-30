@@ -103,6 +103,7 @@ export function ResultPanel({
           error={teaching.error}
           onGenerate={teaching.generate}
           onLevelChange={teaching.updateLevel}
+          onConceptToggle={teaching.toggleConcept}
         />
 
         <LyricsPanel

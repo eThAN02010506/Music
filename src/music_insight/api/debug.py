@@ -69,6 +69,18 @@ def debug_state(
             "chunk_seconds": settings.omni_chunk_seconds,
             "model_max_concurrency": settings.omni_max_concurrency,
             "job_backend": settings.job_backend,
+            "direct_work_scope": (
+                "redis-global"
+                if settings.job_backend == "redis"
+                else "process-local"
+            ),
+            "direct_work_limit": settings.max_direct_work,
+            "direct_work_per_user": settings.max_direct_work_per_user,
+            "direct_work_lease_ttl_seconds": (
+                settings.direct_work_lease_ttl_seconds
+                if settings.job_backend == "redis"
+                else None
+            ),
             "workspace": str(settings.workspace_dir.resolve()),
         },
         "jobs": [item.model_dump(mode="json") for item in recent_jobs],

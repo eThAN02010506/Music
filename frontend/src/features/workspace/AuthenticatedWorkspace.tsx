@@ -50,10 +50,12 @@ import {
 export function AuthenticatedWorkspace({
   user,
   health,
+  onUserUpdated,
   onLoggedOut,
 }: {
   user: User;
   health: HealthResult | null;
+  onUserUpdated: (user: User) => void;
   onLoggedOut: () => void;
 }) {
   const [workspace, dispatch] = useReducer(
@@ -66,6 +68,8 @@ export function AuthenticatedWorkspace({
     clear: clearUploadAudio,
   } = useObjectUrl();
   const [language, setLanguage] = useState("auto");
+  const [inputSource, setInputSource] = useState<"file" | "url">("file");
+  const [remoteUrl, setRemoteUrl] = useState("");
   const [modelSource, setModelSource] = useState<"network" | "local">("network");
   const [modelEndpoint, setModelEndpoint] = useState("");
   const [localModelPath, setLocalModelPath] = useState("");
@@ -123,6 +127,8 @@ export function AuthenticatedWorkspace({
 
   const { analyze, creatingJob } = useAnalysisSubmission({
     file,
+    inputSource,
+    remoteUrl,
     language,
     modelSource,
     modelEndpoint,
@@ -150,6 +156,7 @@ export function AuthenticatedWorkspace({
     viewRequestRef.current.invalidate();
     setUploadBlob(next);
     dispatch({ type: "file-chosen", file: next });
+    setInputSource("file");
     setStartMode("analysis");
   };
 
@@ -190,7 +197,12 @@ export function AuthenticatedWorkspace({
     }
   };
 
-  const audioUrl = file ? uploadAudioUrl : storedAudioUrl;
+  const audioUrl = file
+    ? uploadAudioUrl
+    : storedAudioUrl
+      || (activeId
+        ? `${API_BASE}/history/${encodeURIComponent(activeId)}/audio`
+        : "");
   const workspaceTitle = comparison.length === 2
     ? "双曲对比"
     : activeId
@@ -305,9 +317,17 @@ export function AuthenticatedWorkspace({
                 {startMode === "analysis" ? (
                   <UploadPanel
                     file={file}
+                    inputSource={inputSource}
+                    remoteUrl={remoteUrl}
                     language={language}
                     busy={busy}
                     onFile={chooseFile}
+                    onInputSource={(source) => {
+                      viewRequestRef.current.invalidate();
+                      setInputSource(source);
+                      dispatch({ type: "new-analysis" });
+                    }}
+                    onRemoteUrl={setRemoteUrl}
                     onLanguage={setLanguage}
                     onAnalyze={() => void analyze()}
                   />
@@ -347,7 +367,13 @@ export function AuthenticatedWorkspace({
           }}
         />
       )}
-      {showLeaderboard && <LeaderboardPanel onClose={closeLeaderboard} />}
+      {showLeaderboard && (
+        <LeaderboardPanel
+          user={user}
+          onUserUpdated={onUserUpdated}
+          onClose={closeLeaderboard}
+        />
+      )}
     </div>
   );
 }

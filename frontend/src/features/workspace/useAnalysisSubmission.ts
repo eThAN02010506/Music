@@ -14,6 +14,8 @@ type ModelSource = "network" | "local";
 
 type AnalysisSubmissionOptions = {
   file: File | null;
+  inputSource: "file" | "url";
+  remoteUrl: string;
   language: string;
   modelSource: ModelSource;
   modelEndpoint: string;
@@ -54,6 +56,8 @@ function analysisForm({
 
 export function useAnalysisSubmission({
   file,
+  inputSource,
+  remoteUrl,
   language,
   modelSource,
   modelEndpoint,
@@ -75,21 +79,46 @@ export function useAnalysisSubmission({
   }, []);
 
   const analyze = useCallback(async () => {
-    if (!file || creatingJobRef.current) return;
+    const remote = remoteUrl.trim();
+    if (
+      creatingJobRef.current
+      || (inputSource === "file" && !file)
+      || (inputSource === "url" && !remote)
+    ) return;
     creatingJobRef.current = true;
     setCreatingJob(true);
     const requestId = viewRequests.begin();
+    if (inputSource === "url") {
+      dispatch({
+        type: "remote-chosen",
+        fileName: remoteFileName(remote),
+      });
+    }
     dispatch({ type: "analysis-started" });
 
     try {
-      const snapshot = await api.createJob(analysisForm({
-        file,
-        language,
-        modelSource,
-        modelEndpoint,
-        localModelPath,
-        localModelRoot: runtimeConfig?.local_model_root || "src/model",
-      }));
+      const snapshot = inputSource === "url"
+        ? await api.createJobFromUrl({
+            url: remote,
+            language: language === "auto" ? null : language,
+            model_source: modelSource,
+            model_endpoint: modelSource === "network" && modelEndpoint.trim()
+              ? modelEndpoint.trim()
+              : null,
+            local_model_path: modelSource === "local"
+              ? localModelPath.trim()
+                || runtimeConfig?.local_model_root
+                || "src/model"
+              : null,
+          })
+        : await api.createJob(analysisForm({
+            file: file!,
+            language,
+            modelSource,
+            modelEndpoint,
+            localModelPath,
+            localModelRoot: runtimeConfig?.local_model_root || "src/model",
+          }));
       if (!viewRequests.isCurrent(requestId)) {
         refreshHistory();
         return;
@@ -110,6 +139,8 @@ export function useAnalysisSubmission({
   }, [
     dispatch,
     file,
+    inputSource,
+    remoteUrl,
     runtimeConfig?.local_model_root,
     language,
     localModelPath,
@@ -120,4 +151,15 @@ export function useAnalysisSubmission({
   ]);
 
   return { analyze, creatingJob };
+}
+
+function remoteFileName(value: string): string {
+  try {
+    const name = decodeURIComponent(
+      new URL(value).pathname.split("/").filter(Boolean).pop() || "",
+    );
+    return name || "远程音频";
+  } catch {
+    return "远程音频";
+  }
 }

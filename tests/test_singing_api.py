@@ -68,12 +68,19 @@ def test_compare_singing_uploads_scores_and_removes_temporary_files(tmp_path):
                     ),
                 },
             )
+        hidden_leaderboard = client.get("/leaderboard")
+        visibility = client.patch(
+            "/auth/me",
+            json={"leaderboard_visible": True},
+        )
         leaderboard = client.get("/leaderboard")
     finally:
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
     assert response.json()["total"] == 88
+    assert hidden_leaderboard.json()["entries"] == []
+    assert visibility.status_code == 200
     assert leaderboard.status_code == 200
     assert leaderboard.json()["entries"][0]["total"] == 88
     assert leaderboard.json()["entries"][0]["source"] == "standalone"
@@ -116,6 +123,14 @@ def test_attempt_history_is_paginated_scoped_and_deletable(tmp_path):
         accounts = AccountStore(tmp_path / "history.sqlite3")
         first_user = first_client.get("/auth/me").json()
         second_user = second_client.get("/auth/me").json()
+        first_client.patch(
+            "/auth/me",
+            json={"leaderboard_visible": True},
+        )
+        second_client.patch(
+            "/auth/me",
+            json={"leaderboard_visible": True},
+        )
         start = datetime(2026, 7, 30, 9, tzinfo=UTC)
         first_old = accounts.record_score(
             first_user["id"],

@@ -171,6 +171,24 @@ export function useTeachingExperience(historyId: string | null) {
     setProfile(next);
   }, [profile.learned_concepts, profile.preferences]);
 
+  const toggleConcept = useCallback(async (concept: string) => {
+    const learned = profile.learned_concepts.includes(concept)
+      ? profile.learned_concepts.filter((item) => item !== concept)
+      : [...profile.learned_concepts, concept];
+    try {
+      const next = await api.updateListenerProfile(
+        profile.level,
+        profile.preferences,
+        learned,
+      );
+      setProfile(next);
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "无法保存听觉训练进度",
+      );
+    }
+  }, [profile]);
+
   return {
     guide,
     profile,
@@ -179,5 +197,6 @@ export function useTeachingExperience(historyId: string | null) {
     error,
     generate,
     updateLevel,
+    toggleConcept,
   };
 }

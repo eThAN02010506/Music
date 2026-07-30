@@ -23,6 +23,8 @@ test("leaderboard loading and failure states are announced", () => {
     source,
     /className="leaderboard-state error" role="alert">\{error\}/,
   );
+  assert.match(source, /checked=\{user\.leaderboard_visible\}/);
+  assert.match(source, /默认不公开/);
 });
 
 test("compact topbar actions retain accessible names", () => {

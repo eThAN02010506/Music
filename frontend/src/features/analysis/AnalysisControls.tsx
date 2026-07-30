@@ -22,16 +22,24 @@ const stageLabels: Record<string, string> = {
 
 export function UploadPanel({
   file,
+  inputSource,
+  remoteUrl,
   language,
   busy,
   onFile,
+  onInputSource,
+  onRemoteUrl,
   onLanguage,
   onAnalyze,
 }: {
   file: File | null;
+  inputSource: "file" | "url";
+  remoteUrl: string;
   language: string;
   busy: boolean;
   onFile: (file: File) => void;
+  onInputSource: (source: "file" | "url") => void;
+  onRemoteUrl: (url: string) => void;
   onLanguage: (language: string) => void;
   onAnalyze: () => void;
 }) {
@@ -64,48 +72,84 @@ export function UploadPanel({
         </div>
       </div>
 
-      <div
-        className={`drop-zone ${dragging ? "dragging" : ""} ${file ? "has-file" : ""} ${busy ? "disabled" : ""}`}
-        onDragOver={(event) => {
-          event.preventDefault();
-          if (!busy) setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={drop}
-        onClick={() => {
-          if (!busy) inputRef.current?.click();
-        }}
-        role="button"
-        tabIndex={busy ? -1 : 0}
-        aria-disabled={busy}
-        onKeyDown={(event) => {
-          if (!busy && (event.key === "Enter" || event.key === " ")) {
-            event.preventDefault();
-            inputRef.current?.click();
-          }
-        }}
-      >
-        <input
-          ref={inputRef}
-          type="file"
-          accept="audio/*,.wav,.mp3,.flac,.m4a,.ogg,.oga,.webm"
-          hidden
+      <div className="audio-source-tabs" role="group" aria-label="音频来源">
+        <button
+          type="button"
+          className={inputSource === "file" ? "active" : ""}
           disabled={busy}
-          onChange={(event) => event.target.files?.[0] && onFile(event.target.files[0])}
-        />
-        <div className="upload-icon" aria-hidden="true">↑</div>
-        {file ? (
-          <>
-            <strong>{file.name}</strong>
-            <span>{(file.size / 1024 / 1024).toFixed(1)} MB · 点击更换</span>
-          </>
-        ) : (
-          <>
-            <strong>拖放音频到这里</strong>
-            <span>或点击选择 WAV、MP3、FLAC、M4A、OGG</span>
-          </>
-        )}
+          onClick={() => onInputSource("file")}
+        >
+          本地文件
+        </button>
+        <button
+          type="button"
+          className={inputSource === "url" ? "active" : ""}
+          disabled={busy}
+          onClick={() => onInputSource("url")}
+        >
+          直接音频链接
+        </button>
       </div>
+      {inputSource === "file" ? (
+        <div
+          className={`drop-zone ${dragging ? "dragging" : ""} ${file ? "has-file" : ""} ${busy ? "disabled" : ""}`}
+          onDragOver={(event) => {
+            event.preventDefault();
+            if (!busy) setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={drop}
+          onClick={() => {
+            if (!busy) inputRef.current?.click();
+          }}
+          role="button"
+          tabIndex={busy ? -1 : 0}
+          aria-disabled={busy}
+          onKeyDown={(event) => {
+            if (!busy && (event.key === "Enter" || event.key === " ")) {
+              event.preventDefault();
+              inputRef.current?.click();
+            }
+          }}
+        >
+          <input
+            ref={inputRef}
+            type="file"
+            accept="audio/*,.wav,.mp3,.flac,.m4a,.ogg,.oga,.webm"
+            hidden
+            disabled={busy}
+            onChange={(event) => event.target.files?.[0] && onFile(event.target.files[0])}
+          />
+          <div className="upload-icon" aria-hidden="true">↑</div>
+          {file ? (
+            <>
+              <strong>{file.name}</strong>
+              <span>{(file.size / 1024 / 1024).toFixed(1)} MB · 点击更换</span>
+            </>
+          ) : (
+            <>
+              <strong>拖放音频到这里</strong>
+              <span>或点击选择 WAV、MP3、FLAC、M4A、OGG</span>
+            </>
+          )}
+        </div>
+      ) : (
+        <label className="remote-audio-field">
+          <span>公开的直接音频 URL</span>
+          <input
+            type="url"
+            inputMode="url"
+            value={remoteUrl}
+            disabled={busy}
+            placeholder="https://example.com/music.mp3"
+            onChange={(event) => onRemoteUrl(event.target.value)}
+          />
+          <small>
+            仅支持直接返回音频的公网 HTTP(S) 链接。不会抓取 YouTube 等网页，
+            也不会绕过登录、版权、付费或 DRM 限制。
+          </small>
+        </label>
+      )}
 
       <div className="upload-actions">
         <label>
@@ -116,7 +160,14 @@ export function UploadPanel({
             <option value="en">English</option>
           </select>
         </label>
-        <button className="primary-button" disabled={!file || busy} onClick={onAnalyze}>
+        <button
+          className="primary-button"
+          disabled={
+            busy
+            || (inputSource === "file" ? !file : !remoteUrl.trim())
+          }
+          onClick={onAnalyze}
+        >
           {busy ? "分析进行中" : "开始分析"}
           <span>→</span>
         </button>
