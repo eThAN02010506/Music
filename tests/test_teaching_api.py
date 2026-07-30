@@ -17,6 +17,7 @@ from music_insight.api.dependencies import get_history_store
 from music_insight.api.routers import teaching as teaching_router
 from music_insight.api.services.teaching import (
     TEACHING_SCHEMA_VERSION,
+    _remove_repeated_suggestions,
     answer_music_question,
     create_conversation,
     generate_teaching_guide,
@@ -33,6 +34,11 @@ from music_insight.schemas import (
     TimeSpan,
 )
 from music_insight.teaching.fallback import EvidenceTeachingModel
+from music_insight.teaching.models import (
+    ConversationTurn,
+    ListenerProfile,
+    TeachingChatContext,
+)
 
 
 def _result() -> AnalysisResult:
@@ -101,6 +107,40 @@ def _stores(tmp_path):
         user_id=user.id,
     )
     return history, repository, user, other
+
+
+def test_chat_suggestions_remove_current_previous_and_duplicate_questions():
+    context = TeachingChatContext(
+        analysis_id="song-1",
+        question="现在的力度怎样变化？",
+        current_time_s=5,
+        conversation_history=[
+            ConversationTurn(
+                question="这里是什么乐器？",
+                answer="现有证据显示钢琴。",
+                created_at=datetime.now(UTC),
+            )
+        ],
+        listener_profile=ListenerProfile(),
+        analysis_summary="歌曲从安静陈述逐步走向开放。",
+        duration_s=20,
+    )
+    response = asyncio.run(
+        EvidenceTeachingModel().answer_music_question(context)
+    ).model_copy(
+        update={
+            "suggested_questions": [
+                "现在的力度怎样变化？",
+                "这里是什么乐器？",
+                "后面哪里发生转折？",
+                "后面哪里发生转折？",
+            ]
+        }
+    )
+
+    cleaned = _remove_repeated_suggestions(response, context=context)
+
+    assert cleaned.suggested_questions == ["后面哪里发生转折？"]
 
 
 class _BlockingRepository:

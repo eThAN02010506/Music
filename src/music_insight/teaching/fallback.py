@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from music_insight.schemas import VocalPresenceStatus
 from music_insight.teaching.grounding import (
@@ -20,6 +21,7 @@ from music_insight.teaching.models import (
     MusicUnderstandingMap,
     PlayerAction,
     PlayerActionType,
+    RelistenEvidence,
     SectionMarker,
     TeachingChatContext,
     TeachingChatResponse,
@@ -262,7 +264,10 @@ class EvidenceTeachingModel:
                     id="answer-evidence-1",
                     statement=event.observation,
                     claim_type=EvidenceClaimType.GROUNDED_INTERPRETATION,
-                    dimension=event.audio_evidence[0].dimension,
+                    dimension=_dimension_from_statement(
+                        event.observation,
+                        event.audio_evidence[0].dimension,
+                    ),
                     source_refs=source_refs,
                     time_range_ids=[primary.id],
                     confidence=event.confidence,
@@ -288,8 +293,12 @@ class EvidenceTeachingModel:
             effect = event.expressive_role
             alternatives = event.alternative_readings
             task_instruction = event.listening_task
-            focus = event.audio_evidence[0].dimension
+            focus = _dimension_from_statement(
+                event.observation,
+                event.audio_evidence[0].dimension,
+            )
             confidence = min(event.confidence, 0.72)
+            insufficient_evidence = False
         else:
             direct = _message(
                 output_language,
@@ -329,18 +338,34 @@ class EvidenceTeachingModel:
             )
             focus = AudioDimension.OTHER
             confidence = 0.2
+            insufficient_evidence = True
+
+        tailored = _tailor_fallback_answer(
+            context=context,
+            primary=primary,
+            relevant=relevant,
+            relisten_facts=relisten_facts,
+            direct=direct,
+            fact=fact,
+            effect=effect,
+            task_instruction=task_instruction,
+            focus=focus,
+            alternatives=alternatives,
+            confidence=confidence,
+            insufficient_evidence=insufficient_evidence,
+        )
         answer = (
             (
-                f"Short answer: {direct}\n"
-                f"Audible evidence: {fact}\n"
-                f"Expressive effect: {effect}\n"
+                f"Short answer: {tailored.direct}\n"
+                f"Audible evidence: {tailored.fact}\n"
+                f"Expressive effect: {tailored.effect}\n"
                 "This is not the only valid interpretation; compare the alternatives while listening."
             )
             if output_language == "en"
             else (
-                f"简短结论：{direct}\n"
-                f"可直接观察的事实：{fact}\n"
-                f"基于事实的表达解释：{effect}\n"
+                f"简短结论：{tailored.direct}\n"
+                f"可直接观察的事实：{tailored.fact}\n"
+                f"基于事实的表达解释：{tailored.effect}\n"
                 "主观理解并非唯一答案；可以把下面的其他理解作为复听时的比较。"
             )
         )
@@ -371,28 +396,421 @@ class EvidenceTeachingModel:
             time_ranges=ranges,
             evidence=evidence,
             listening_task=ListeningTask(
-                instruction=task_instruction,
-                focus=focus,
+                instruction=tailored.task_instruction,
+                focus=tailored.focus,
                 time_range_id=primary.id,
             ),
-            suggested_questions=[
-                _message(
-                    output_language,
-                    "Which changes first here: rhythm, timbre, or dynamics?",
-                    "这段最先发生变化的是节奏、音色还是力度？",
-                ),
-                _message(
-                    output_language,
-                    "How does this passage differ from the previous one?",
-                    "这段和前一个段落的气氛有什么不同？",
-                ),
-            ],
+            suggested_questions=_suggested_questions(
+                context,
+                intent=tailored.intent,
+                focus=tailored.focus,
+            ),
             player_actions=actions,
-            alternative_readings=alternatives[:5],
-            confidence=confidence,
+            alternative_readings=tailored.alternatives[:5],
+            confidence=tailored.confidence,
             relistened=bool(context.relisten_evidence),
-            insufficient_evidence=not bool(relevant),
+            insufficient_evidence=tailored.insufficient_evidence,
         )
+
+
+@dataclass(frozen=True)
+class _FallbackAnswer:
+    intent: str
+    direct: str
+    fact: str
+    effect: str
+    task_instruction: str
+    focus: AudioDimension
+    alternatives: list[str]
+    confidence: float
+    insufficient_evidence: bool
+
+
+def _tailor_fallback_answer(
+    *,
+    context: TeachingChatContext,
+    primary: AnswerTimeRange,
+    relevant: list[UnderstandingEvent],
+    relisten_facts: list[RelistenEvidence],
+    direct: str,
+    fact: str,
+    effect: str,
+    task_instruction: str,
+    focus: AudioDimension,
+    alternatives: list[str],
+    confidence: float,
+    insufficient_evidence: bool,
+) -> _FallbackAnswer:
+    """Keep conservative fallback answers responsive to the actual question."""
+
+    output_language = context.output_language
+    intent = _question_intent(context.question, bool(context.compare_ranges))
+    dimensions = _available_dimensions(relevant, relisten_facts)
+    dimension_text = _join_dimensions(dimensions, output_language)
+
+    if intent == "general" and relevant:
+        # A fallback must not turn a broad map interpretation into a fresh,
+        # question-specific fact. Keep the direct answer at the dimensions
+        # that are actually present in the timed evidence.
+        direct = _generic_interpretation(dimensions, output_language)
+        effect = _event_role(output_language)
+        focus = dimensions[0] if dimensions else focus
+        confidence = min(confidence, 0.48)
+    elif intent == "change_order":
+        if len(dimensions) == 1:
+            confirmed = dimensions[0]
+            direct = _message(
+                output_language,
+                (
+                    f"The saved evidence confirms a change in "
+                    f"{_dimension_label(confirmed, output_language)}, but it "
+                    "does not time the other choices precisely enough to say "
+                    "which of all of them changed first."
+                ),
+                (
+                    f"现有证据只确认了{_dimension_label(confirmed)}的变化，"
+                    "没有把其余选项的变化时刻记录得足够精确，因此还不能断言"
+                    "三者中谁最先改变。"
+                ),
+            )
+            effect = _message(
+                output_language,
+                "This change can shape the sense of motion, but it does not prove simultaneous changes in the other dimensions.",
+                "这一变化可以影响推进感，但不能据此推定节奏和音色也同时发生了变化。",
+            )
+            task_instruction = _message(
+                output_language,
+                "Replay once for pulse, once for tone color, and once for loudness; mark the first clearly audible change on each pass.",
+                "连续复听三遍：第一遍只跟拍点，第二遍只听音色，第三遍只听响度；分别记下第一次明确变化的时刻。",
+            )
+            focus = confirmed
+            confidence = min(confidence, 0.48)
+        elif dimensions:
+            direct = _message(
+                output_language,
+                (
+                    f"The timed evidence covers {dimension_text}, but its "
+                    "ranges are too coarse to establish a reliable first change."
+                ),
+                (
+                    f"现有时间证据涉及{dimension_text}，但时间粒度不足以可靠判断"
+                    "哪一项最先变化。"
+                ),
+            )
+            task_instruction = _message(
+                output_language,
+                "Loop the range three times and timestamp the first change in rhythm, timbre, and loudness separately.",
+                "循环这段三遍，分别标记节奏、音色和响度第一次发生变化的时刻，再比较先后。",
+            )
+            confidence = min(confidence, 0.42)
+        else:
+            direct = _message(
+                output_language,
+                "The saved evidence does not distinguish rhythm, timbre, and dynamics here, so their order cannot be determined yet.",
+                "现有证据没有分别记录这里的节奏、音色与力度变化，因此暂时无法判断先后。",
+            )
+            task_instruction = _message(
+                output_language,
+                "Replay three times, attending to rhythm, timbre, and loudness separately, and mark the first change you can hear.",
+                "分三遍复听，分别只关注节奏、音色和响度，并标记各自第一次能听见的变化。",
+            )
+            focus = AudioDimension.OTHER
+            confidence = min(confidence, 0.3)
+            insufficient_evidence = True
+    elif intent == "compare_previous":
+        previous = _previous_event(relevant, context.nearby_events)
+        at_opening = primary.start_s <= 0.5 and previous is None
+        if at_opening:
+            direct = _message(
+                output_language,
+                "This range starts at the beginning, so there is no previous passage in the recording to compare with it.",
+                "这一范围从录音开头开始，前面没有可供比较的段落。",
+            )
+            fact = _message(
+                output_language,
+                f"The cited range begins at {primary.start_s:.1f} seconds.",
+                f"本次引用范围从 {primary.start_s:.1f} 秒开始。",
+            )
+            effect = _message(
+                output_language,
+                "Treat this passage as the reference sound world; compare a later passage against it instead of inventing a preceding mood.",
+                "应把这里当作建立参照的声音起点，再用后面的片段与它比较，而不是虚构一个“前段气氛”。",
+            )
+            task_instruction = _message(
+                output_language,
+                "Remember the opening's loudness and texture, then jump to the first later turning point and compare them.",
+                "先记住开头的响度与织体，再跳到后面第一个明显转折处进行对比。",
+            )
+            focus = AudioDimension.STRUCTURE
+            confidence = 0.4
+            insufficient_evidence = True
+        elif previous is None:
+            direct = _message(
+                output_language,
+                "Only the current passage is present in the retrieved evidence, so a previous-passage comparison is not yet supportable.",
+                "检索到的证据只有当前片段，缺少前一段的同期证据，因此暂时不能可靠比较两段气氛。",
+            )
+            task_instruction = _message(
+                output_language,
+                "Set A to the preceding passage and B to this one, then compare loudness, texture, and pulse in that order.",
+                "请把前一段设为 A、当前段设为 B，再依次比较响度、织体和拍点。",
+            )
+            confidence = min(confidence, 0.35)
+            insufficient_evidence = True
+        else:
+            direct = _message(
+                output_language,
+                "Both passages are available, but the saved evidence is not detailed enough to reduce their difference to one mood label.",
+                "前后两段都有时间证据，但现有证据还不足以把差异归结为一个确定的气氛标签。",
+            )
+            fact = _message(
+                output_language,
+                (
+                    f"The previous event spans {previous.start_s:.1f}–"
+                    f"{previous.end_s:.1f} seconds; current evidence covers "
+                    f"{primary.start_s:.1f}–{primary.end_s:.1f} seconds."
+                ),
+                (
+                    f"前一事件位于 {previous.start_s:.1f}–{previous.end_s:.1f} 秒；"
+                    f"当前证据位于 {primary.start_s:.1f}–{primary.end_s:.1f} 秒。"
+                ),
+            )
+            task_instruction = _message(
+                output_language,
+                "Alternate the two ranges and compare loudness, density, and instrumental color one dimension at a time.",
+                "交替播放前后两段，每次只比较一个维度：响度、织体密度、乐器音色。",
+            )
+            focus = AudioDimension.STRUCTURE
+            confidence = min(confidence, 0.48)
+    elif intent == "instrument" and AudioDimension.INSTRUMENTATION not in dimensions:
+        direct = _message(
+            output_language,
+            "The available evidence does not identify an instrument reliably in this range.",
+            "这一范围的现有证据没有可靠标出具体乐器，因此不能仅凭当前记录点名铜管或弦乐。",
+        )
+        effect = _message(
+            output_language,
+            "An orchestral impression may be a useful listening hypothesis, but it is not yet a verified instrument claim.",
+            "“管弦乐感”可以作为复听假设，但目前还不是已经核实的乐器结论。",
+        )
+        task_instruction = _message(
+            output_language,
+            "Replay once for sustained tones and once for attacks; describe the sound before naming the instrument.",
+            "先听持续音，再听发音瞬间；先描述音色与奏法，再尝试判断乐器。",
+        )
+        focus = AudioDimension.TIMBRE
+        confidence = min(confidence, 0.35)
+        insufficient_evidence = True
+    elif intent == "lyrics" and not context.nearby_lyrics:
+        direct = _message(
+            output_language,
+            "No reliable lyric segment is available in this range.",
+            "这一范围没有可确认的歌词片段，不能根据器乐或能量证据补写歌词。",
+        )
+        effect = _message(
+            output_language,
+            "The passage can still be discussed through melody, rhythm, timbre, and dynamics.",
+            "仍可以从旋律、节奏、音色和力度理解这一段的表达。",
+        )
+        task_instruction = _message(
+            output_language,
+            "Listen for whether a stable vocal line is actually present before trying to transcribe words.",
+            "先确认是否真的存在稳定人声线，再尝试听辨词句。",
+        )
+        focus = AudioDimension.LYRICS
+        confidence = min(confidence, 0.3)
+        insufficient_evidence = True
+
+    return _FallbackAnswer(
+        intent=intent,
+        direct=direct,
+        fact=fact,
+        effect=effect,
+        task_instruction=task_instruction,
+        focus=focus,
+        alternatives=alternatives,
+        confidence=min(confidence, 0.4) if insufficient_evidence else confidence,
+        insufficient_evidence=insufficient_evidence,
+    )
+
+
+def _question_intent(question: str, has_comparison: bool) -> str:
+    folded = " ".join(question.casefold().split())
+    if has_comparison:
+        return "compare_previous"
+    if any(
+        token in folded
+        for token in (
+            "最先发生变化",
+            "先发生变化",
+            "哪个先变",
+            "哪一个先变",
+            "which changes first",
+            "what changes first",
+        )
+    ):
+        return "change_order"
+    if any(
+        token in folded
+        for token in (
+            "前一个段落",
+            "前一段",
+            "上一段",
+            "previous passage",
+            "previous section",
+            "compared with before",
+        )
+    ):
+        return "compare_previous"
+    if any(token in folded for token in ("乐器", "配器", "instrument", "orchestra")):
+        return "instrument"
+    if any(token in folded for token in ("歌词", "唱了什么", "lyric", "words sung")):
+        return "lyrics"
+    return "general"
+
+
+def _available_dimensions(
+    relevant: list[UnderstandingEvent],
+    relisten_facts: list[RelistenEvidence],
+) -> list[AudioDimension]:
+    values: list[AudioDimension] = []
+    for event in relevant:
+        for item in event.audio_evidence:
+            values.append(_dimension_from_statement(item.statement, item.dimension))
+    for item in relisten_facts:
+        values.append(_dimension_from_statement(item.observation, item.dimension))
+    return _dedupe(values)
+
+
+def _dimension_from_statement(
+    statement: str,
+    declared: AudioDimension,
+) -> AudioDimension:
+    folded = statement.casefold()
+    candidates = (
+        (AudioDimension.DYNAMICS, ("能量", "响度", "力度", "energy", "loudness", "dynamic")),
+        (AudioDimension.RHYTHM, ("节奏", "节拍", "鼓点", "rhythm", "beat", "tempo")),
+        (AudioDimension.TIMBRE, ("音色", "质感", "timbre", "tone color")),
+        (AudioDimension.INSTRUMENTATION, ("乐器", "配器", "铜管", "弦乐", "instrument", "orchestra")),
+        (AudioDimension.HARMONY, ("和声", "和弦", "harmony", "chord")),
+        (AudioDimension.MELODY, ("旋律", "音高", "melody", "pitch")),
+    )
+    for dimension, keywords in candidates:
+        if any(keyword in folded for keyword in keywords):
+            return dimension
+    return declared
+
+
+def _join_dimensions(
+    dimensions: list[AudioDimension],
+    output_language: str,
+) -> str:
+    labels = [_dimension_label(item, output_language) for item in dimensions]
+    if not labels:
+        return _message(output_language, "no specific dimension", "没有具体维度")
+    return (", ".join(labels) if output_language == "en" else "、".join(labels))
+
+
+def _previous_event(
+    relevant: list[UnderstandingEvent],
+    nearby: list[UnderstandingEvent],
+) -> UnderstandingEvent | None:
+    if not relevant:
+        return None
+    current = relevant[0]
+    candidates = [
+        event
+        for event in nearby
+        if event.id != current.id and event.end_s <= current.start_s + 0.25
+    ]
+    return max(candidates, key=lambda event: event.end_s, default=None)
+
+
+def _suggested_questions(
+    context: TeachingChatContext,
+    *,
+    intent: str,
+    focus: AudioDimension,
+) -> list[str]:
+    output_language = context.output_language
+    by_intent = {
+        "change_order": [
+            _message(
+                output_language,
+                "At what moment does the clearest change begin?",
+                "最清楚的变化从哪一秒开始？",
+            ),
+            _message(
+                output_language,
+                "If loudness is matched, does the tone color still change?",
+                "如果把音量差异忽略掉，音色是否仍然变化？",
+            ),
+        ],
+        "compare_previous": [
+            _message(
+                output_language,
+                "Where is the first clear turning point after this opening?",
+                "这个开头之后，第一个明显转折出现在什么时候？",
+            ),
+            _message(
+                output_language,
+                "What material from the opening returns later?",
+                "开头建立的哪些声音材料后来再次出现？",
+            ),
+        ],
+        "instrument": [
+            _message(
+                output_language,
+                "Which audible feature best distinguishes the instrument here?",
+                "这里哪种音色特征最能帮助判断乐器？",
+            ),
+            _message(
+                output_language,
+                "Does the sound enter as one layer or several layers?",
+                "这个声音是单一声部进入，还是多个声部叠加？",
+            ),
+        ],
+        "lyrics": [
+            _message(
+                output_language,
+                "Is a stable vocal line actually audible here?",
+                "这里是否真的能听到稳定的人声线？",
+            ),
+            _message(
+                output_language,
+                "How does the accompaniment shape this passage without relying on lyrics?",
+                "不依赖歌词时，伴奏怎样塑造这一段的表达？",
+            ),
+        ],
+        "general": [
+            _message(
+                output_language,
+                f"How does {_dimension_label(focus, output_language)} change across this range?",
+                f"这一段的{_dimension_label(focus)}是怎样变化的？",
+            ),
+            _message(
+                output_language,
+                "Which later passage would make the clearest A/B comparison?",
+                "后面哪一段最适合与这里做 A/B 对比？",
+            ),
+        ],
+    }
+    excluded = {
+        _normalize_question(context.question),
+        *(
+            _normalize_question(turn.question)
+            for turn in context.conversation_history[-8:]
+        ),
+    }
+    return [
+        question
+        for question in by_intent[intent]
+        if _normalize_question(question) not in excluded
+    ][:2]
+
+
+def _normalize_question(value: str) -> str:
+    return re.sub(r"[\W_]+", "", value.casefold(), flags=re.UNICODE)
 
 
 def _cluster_facts(facts: list[SourceFact]) -> list[list[SourceFact]]:

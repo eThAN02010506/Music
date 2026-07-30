@@ -783,6 +783,7 @@ async def _answer_chat_context(
             response = response.model_copy(
                 update={"warnings": [*response.warnings[:8], warning]}
             )
+    response = _remove_repeated_suggestions(response, context=context)
     if relisten_warning:
         response = response.model_copy(
             update={
@@ -793,6 +794,37 @@ async def _answer_chat_context(
             }
         )
     return response
+
+
+def _remove_repeated_suggestions(
+    response: TeachingChatResponse,
+    *,
+    context: TeachingChatContext,
+) -> TeachingChatResponse:
+    """Do not recommend a question that the listener has already asked."""
+
+    excluded = {
+        _normalized_question(context.question),
+        *(
+            _normalized_question(turn.question)
+            for turn in context.conversation_history[-8:]
+        ),
+    }
+    seen: set[str] = set()
+    suggestions: list[str] = []
+    for suggestion in response.suggested_questions:
+        normalized = _normalized_question(suggestion)
+        if not normalized or normalized in excluded or normalized in seen:
+            continue
+        seen.add(normalized)
+        suggestions.append(suggestion)
+    if suggestions == response.suggested_questions:
+        return response
+    return response.model_copy(update={"suggested_questions": suggestions})
+
+
+def _normalized_question(value: str) -> str:
+    return "".join(character for character in value.casefold() if character.isalnum())
 
 
 async def _profile_and_messages(

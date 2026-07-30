@@ -623,3 +623,79 @@ def test_fallback_chat_answer_passes_time_and_evidence_grounding():
     assert response.evidence[0].claim_type == (
         EvidenceClaimType.GROUNDED_INTERPRETATION
     )
+
+
+def test_fallback_chat_answers_change_order_instead_of_repeating_map_summary():
+    energy = Evidence(
+        id="dsp.energy.only",
+        source="librosa",
+        kind=EvidenceType.COMPUTED,
+        text="能量从 0.08 上升到 0.13",
+        confidence=0.9,
+        span=TimeSpan(start_s=0, end_s=7),
+    )
+    result = AnalysisResult(
+        summary="现有证据只包含开头的能量变化。",
+        lyrics=[],
+        instruments=[],
+        sound_events=[],
+        emotion_timeline=[],
+        inferred_atmosphere=[],
+        themes=[],
+        technical_metrics=DspResult(energy_curve=[energy]),
+        evidence=[energy],
+    )
+    understanding_map = asyncio.run(
+        EvidenceTeachingModel().build_understanding_map(
+            MapGenerationContext(
+                analysis_id="energy-only",
+                result=result,
+                duration_s=20,
+                listener_profile=ListenerProfile(),
+            )
+        )
+    )
+    context = TeachingChatContext(
+        analysis_id="energy-only",
+        question="这段最先发生变化的是节奏、音色还是力度？",
+        current_time_s=3,
+        nearby_events=understanding_map.events,
+        listener_profile=ListenerProfile(),
+        analysis_summary=result.summary,
+        duration_s=20,
+    )
+
+    response = asyncio.run(
+        EvidenceTeachingModel().answer_music_question(context)
+    )
+    validate_chat_response(response, context=context)
+
+    assert "现有证据只确认了力度的变化" in response.answer
+    assert "还不能断言三者中谁最先改变" in response.answer
+    assert "铜管" not in response.answer
+    assert response.listening_task.focus == AudioDimension.DYNAMICS
+    assert context.question not in response.suggested_questions
+
+
+def test_fallback_chat_does_not_invent_a_previous_passage_at_recording_start():
+    result, understanding_map = _understanding_map()
+    context = TeachingChatContext(
+        analysis_id="song-1",
+        question="这段和前一个段落的气氛有什么不同？",
+        current_time_s=0,
+        nearby_events=understanding_map.events,
+        listener_profile=ListenerProfile(),
+        analysis_summary=result.summary,
+        duration_s=20,
+    )
+
+    response = asyncio.run(
+        EvidenceTeachingModel().answer_music_question(context)
+    )
+    validate_chat_response(response, context=context)
+
+    assert "前面没有可供比较的段落" in response.answer
+    assert "虚构一个“前段气氛”" in response.answer
+    assert response.insufficient_evidence is True
+    assert response.confidence <= 0.4
+    assert context.question not in response.suggested_questions
