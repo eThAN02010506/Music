@@ -12,6 +12,11 @@ build/
 .pnpm-store/
 src/model/
 test_samples/
+/*.wav
+/*.ogg
+/*.mp3
+/*.m4a
+/*.flac
 .env
 .env.*
 !.env.example
