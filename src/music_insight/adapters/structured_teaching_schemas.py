@@ -183,86 +183,27 @@ def understanding_map_response_format() -> dict[str, Any]:
 
 
 def teaching_chat_response_format() -> dict[str, Any]:
-    time_range = _object(
-        {
-            "id": _IDENTIFIER,
-            **_span_properties(),
-            "label": _bounded_string(160),
-            "purpose": _bounded_string(400),
-        }
-    )
-    answer_evidence = _object(
-        {
-            "id": _IDENTIFIER,
-            "statement": _bounded_string(1000),
-            "claim_type": {"type": "string", "enum": _CLAIM_TYPES},
-            "dimension": {"type": "string", "enum": _DIMENSIONS},
-            "source_refs": {
-                "type": "array",
-                "items": _SOURCE_ID,
-                "minItems": 1,
-                "maxItems": 10,
-            },
-            "time_range_ids": {
-                "type": "array",
-                "items": _IDENTIFIER,
-                "minItems": 1,
-                "maxItems": 6,
-            },
-            "confidence": _CONFIDENCE,
-        }
-    )
-    listening_task = _object(
-        {
-            "instruction": _bounded_string(800),
-            "focus": {"type": "string", "enum": _DIMENSIONS},
-            "time_range_id": _IDENTIFIER,
-        }
-    )
-    player_action = _object(
-        {
-            "type": {
-                "type": "string",
-                "enum": ["seek", "play_range", "loop_range", "compare_ab"],
-            },
-            "time_range_id": _IDENTIFIER,
-            "comparison_time_range_id": {
-                "anyOf": [_IDENTIFIER, {"type": "null"}],
-            },
-            "label": _bounded_string(160),
-        }
-    )
+    # The model selects semantic content and immutable source IDs. Clickable
+    # ranges, evidence cards, and player commands are expanded locally from
+    # those IDs; asking small local models to reproduce that UI envelope made
+    # responses slow and structurally brittle.
     schema = _object(
         {
-            "answer": _bounded_string(12000),
-            "time_ranges": {
+            "answer": _bounded_string(2400),
+            "source_ids": {
                 "type": "array",
-                "items": time_range,
-                "minItems": 1,
+                "items": _SOURCE_ID,
                 "maxItems": 6,
             },
-            "evidence": {
-                "type": "array",
-                "items": answer_evidence,
-                "maxItems": 12,
-            },
-            "listening_task": listening_task,
             "suggested_questions": _string_array(
                 max_items=4,
-                item_max_length=600,
+                item_max_length=300,
             ),
-            "player_actions": {
-                "type": "array",
-                "items": player_action,
-                "maxItems": 6,
-            },
             "alternative_readings": _string_array(
                 max_items=4,
-                item_max_length=600,
+                item_max_length=300,
             ),
-            "warnings": _string_array(max_items=4, item_max_length=600),
             "confidence": _CONFIDENCE,
-            "relistened": {"type": "boolean"},
             "insufficient_evidence": {"type": "boolean"},
         }
     )

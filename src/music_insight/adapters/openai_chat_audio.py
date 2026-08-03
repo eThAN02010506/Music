@@ -41,6 +41,7 @@ class OpenAIChatAudioAdapter(StructuredOmniAdapter):
         self.completions_path = api_path(completions_path)
         self.models_path = api_path(models_path)
         self._http_client: httpx.AsyncClient | None = None
+        self._json_schema_supported: bool | None = None
 
     @asynccontextmanager
     async def _request_scope(self) -> AsyncIterator[None]:
@@ -48,22 +49,28 @@ class OpenAIChatAudioAdapter(StructuredOmniAdapter):
             yield
 
     async def _chat(self, request: dict[str, Any], timeout: float) -> str:
+        outbound_request = request
+        uses_json_schema = (
+            request.get("response_format", {}).get("type") == "json_schema"
+        )
+        if uses_json_schema and self._json_schema_supported is False:
+            outbound_request = self._json_object_request(request)
         async with self._client_scope() as client:
             response = await self._post_with_retry(
                 client,
-                request,
+                outbound_request,
                 timeout=timeout,
             )
             if (
                 response.status_code in {400, 422}
-                and request.get("response_format", {}).get("type") == "json_schema"
+                and uses_json_schema
+                and outbound_request is request
                 and self._schema_format_unsupported(response)
             ):
-                fallback_request = dict(request)
-                fallback_request["response_format"] = {"type": "json_object"}
+                self._json_schema_supported = False
                 response = await self._post_with_retry(
                     client,
-                    fallback_request,
+                    self._json_object_request(request),
                     timeout=timeout,
                 )
         try:
@@ -74,6 +81,12 @@ class OpenAIChatAudioAdapter(StructuredOmniAdapter):
                 f"{self.source} HTTP {response.status_code}: {detail}"
             ) from exc
         return extract_chat_content(response.json())
+
+    @staticmethod
+    def _json_object_request(request: dict[str, Any]) -> dict[str, Any]:
+        fallback_request = dict(request)
+        fallback_request["response_format"] = {"type": "json_object"}
+        return fallback_request
 
     @asynccontextmanager
     async def _client_scope(self) -> AsyncIterator[httpx.AsyncClient]:
@@ -147,6 +160,8 @@ class OpenAIChatAudioAdapter(StructuredOmniAdapter):
                 "structured output",
                 "schema is not supported",
                 "unsupported schema",
+                "failed to initialize samplers",
+                "failed to parse grammar",
             )
         )
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
+import httpx
 import pytest
 
 from music_insight.adapters.base import UnifiedAudioAdapter
@@ -247,3 +249,67 @@ def test_network_adapter_rejects_retry_without_capability() -> None:
 
     with pytest.raises(RuntimeError, match="不支持歌词重听"):
         asyncio.run(adapter.retry_lyrics(b"wav-data", 3.0, None))
+
+
+def test_openai_audio_falls_back_and_caches_grammar_incompatibility() -> None:
+    requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        requests.append(payload)
+        if len(requests) == 1:
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": (
+                            "Failed to initialize samplers: "
+                            "failed to parse grammar"
+                        )
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": '{"answer":"ok"}'}}
+                ]
+            },
+        )
+
+    adapter = OpenAIChatAudioAdapter(
+        endpoint="http://model.local:42005",
+        model="test-model",
+    )
+    schema_request = {
+        "messages": [{"role": "user", "content": "Return JSON."}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer",
+                "strict": True,
+                "schema": {"type": "object"},
+            },
+        },
+    }
+
+    async def run_requests() -> tuple[str, str]:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as client:
+            adapter._http_client = client
+            try:
+                first = await adapter._chat(schema_request, timeout=1.0)
+                second = await adapter._chat(schema_request, timeout=1.0)
+                return first, second
+            finally:
+                adapter._http_client = None
+
+    first, second = asyncio.run(run_requests())
+
+    assert first == second == '{"answer":"ok"}'
+    assert requests[0]["response_format"]["type"] == "json_schema"
+    assert requests[1]["response_format"] == {"type": "json_object"}
+    assert requests[2]["response_format"] == {"type": "json_object"}
+    assert schema_request["response_format"]["type"] == "json_schema"

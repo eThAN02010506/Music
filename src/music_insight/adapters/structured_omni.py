@@ -291,10 +291,10 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
                 context=context,
                 response_format=teaching_chat_response_format(),
             )
-            payload = await self._chat_json(request, timeout=300.0)
+            payload = await self._chat_json(request, timeout=180.0)
         return parse_teaching_chat_response(
             payload,
-            output_language=context.output_language,
+            context=context,
         )
 
     async def listen_to_excerpts(

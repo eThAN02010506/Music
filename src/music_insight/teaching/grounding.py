@@ -440,7 +440,7 @@ def validate_chat_response(
     *,
     context: TeachingChatContext,
 ) -> None:
-    sources = _chat_source_catalog(context)
+    sources = chat_source_catalog(context)
     ranges = {item.id: item.span for item in response.time_ranges}
     issues: list[str] = []
     for range_id, span in ranges.items():
@@ -516,7 +516,9 @@ def _validate_generated_language(
                 return
 
 
-def _chat_source_catalog(context: TeachingChatContext) -> dict[str, SourceFact]:
+def chat_source_catalog(context: TeachingChatContext) -> dict[str, SourceFact]:
+    """Return the complete, locally verifiable source set used by chat."""
+
     sources = analysis_source_catalog_from_context(context)
     sources.update(
         {

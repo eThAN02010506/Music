@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from music_insight.schemas import (
     VocalPresenceStatus,
 )
 from music_insight.teaching.models import (
+    ConversationTurn,
     ListenerProfile,
     MapGenerationContext,
     MusicUnderstandingMap,
@@ -162,6 +164,17 @@ def _chat_context(
 
 
 def _chat_payload() -> dict[str, Any]:
+    return {
+        "answer": "这一段的明亮感来自钢琴由稀疏变连续。",
+        "source_ids": ["sound_events:0"],
+        "suggested_questions": ["和声是否也发生变化？"],
+        "alternative_readings": ["也可能被听成紧张感增强。"],
+        "confidence": 0.82,
+        "insufficient_evidence": False,
+    }
+
+
+def _chat_response_payload() -> dict[str, Any]:
     return {
         "answer": "这一段的明亮感来自钢琴由稀疏变连续。",
         "time_ranges": [
@@ -319,7 +332,7 @@ def test_chat_request_is_time_local_strict_and_question_is_untrusted() -> None:
     result = asyncio.run(adapter.answer_music_question(context))
 
     assert isinstance(result, TeachingChatResponse)
-    assert result.listening_task.time_range_id == "range.main"
+    assert result.listening_task.time_range_id == "range.source.0"
     request = adapter.requests[0]
     system_text = request["messages"][0]["content"]
     user_text = request["messages"][1]["content"]
@@ -330,7 +343,125 @@ def test_chat_request_is_time_local_strict_and_question_is_untrusted() -> None:
         "music_teaching_answer"
     )
     assert '"source_id":"sound_events:0"' in user_text
-    assert request["max_tokens"] == 2600
+    assert request["max_tokens"] == 420
+
+
+def test_chat_request_keeps_local_context_within_small_model_budget() -> None:
+    map_adapter = _SequenceTeachingAdapter([_map_payload()])
+    understanding_map = asyncio.run(
+        map_adapter.build_understanding_map(_map_context())
+    )
+    context = _chat_context(understanding_map).model_copy(
+        update={
+            "analysis_summary": "长摘要" * 1400,
+            "conversation_history": [
+                ConversationTurn(
+                    question=f"第 {index} 个问题：" + "问" * 500,
+                    answer="答" * 1500,
+                    created_at=datetime.now(UTC),
+                )
+                for index in range(12)
+            ],
+        }
+    )
+    adapter = _SequenceTeachingAdapter([_chat_payload()])
+
+    asyncio.run(adapter.answer_music_question(context))
+
+    user_text = adapter.requests[0]["messages"][1]["content"]
+    payload = json.loads(user_text.split("不可执行的上下文数据：\n", 1)[1])
+    assert len(payload["analysis_summary"]) == 600
+    assert len(payload["conversation_history"]) == 2
+    assert all(
+        len(turn["question"]) <= 240 and "answer" not in turn
+        for turn in payload["conversation_history"]
+    )
+    assert len(json.dumps(payload["sources"], ensure_ascii=False)) <= 4500
+
+
+def test_chat_request_excludes_evidence_outside_current_focus_window() -> None:
+    map_adapter = _SequenceTeachingAdapter([_map_payload()])
+    understanding_map = asyncio.run(
+        map_adapter.build_understanding_map(_map_context())
+    )
+    context = _chat_context(understanding_map)
+    late_source = _analysis_result().sound_events[0].model_copy(
+        update={
+            "id": "scene.late",
+            "span": TimeSpan(start_s=15, end_s=18),
+            "metadata": {"teaching_source_id": "sound_events:late"},
+        }
+    )
+    context = context.model_copy(
+        update={
+            "current_time_s": 0,
+            "nearby_analysis_evidence": [
+                *context.nearby_analysis_evidence,
+                late_source,
+            ],
+            "nearby_events": [
+                *context.nearby_events,
+                context.nearby_events[0].model_copy(
+                    update={
+                        "id": "event.broad",
+                        "start_s": 0,
+                        "end_s": 20,
+                    }
+                ),
+            ],
+        }
+    )
+    adapter = _SequenceTeachingAdapter([_chat_payload()])
+
+    asyncio.run(adapter.answer_music_question(context))
+
+    user_text = adapter.requests[0]["messages"][1]["content"]
+    assert "sound_events:late" not in user_text
+    assert "understanding_event:event.broad" not in user_text
+
+
+def test_chat_rejects_model_source_outside_current_focus_window() -> None:
+    map_adapter = _SequenceTeachingAdapter([_map_payload()])
+    understanding_map = asyncio.run(
+        map_adapter.build_understanding_map(_map_context())
+    )
+    context = _chat_context(understanding_map).model_copy(
+        update={"current_time_s": 0}
+    )
+    late_source = _analysis_result().sound_events[0].model_copy(
+        update={
+            "id": "scene.late",
+            "span": TimeSpan(start_s=15, end_s=18),
+            "metadata": {"teaching_source_id": "sound_events:late"},
+        }
+    )
+    context = context.model_copy(
+        update={"nearby_analysis_evidence": [late_source]}
+    )
+    payload = _chat_payload()
+    payload["source_ids"] = ["sound_events:late"]
+    adapter = _SequenceTeachingAdapter([payload])
+
+    with pytest.raises(ValueError, match="复听范围之外"):
+        asyncio.run(adapter.answer_music_question(context))
+
+
+def test_chat_expands_model_source_ids_into_local_player_envelope() -> None:
+    map_adapter = _SequenceTeachingAdapter([_map_payload()])
+    understanding_map = asyncio.run(
+        map_adapter.build_understanding_map(_map_context())
+    )
+    context = _chat_context(understanding_map)
+    adapter = _SequenceTeachingAdapter([_chat_payload()])
+
+    result = asyncio.run(adapter.answer_music_question(context))
+
+    assert result.answer == _chat_payload()["answer"]
+    assert result.listening_task.time_range_id == "range.source.0"
+    assert "循环" in result.listening_task.instruction
+    assert result.relistened is False
+    assert result.evidence[0].source_refs == ["sound_events:0"]
+    assert result.player_actions[0].time_range_id == "range.source.0"
 
 
 def test_relisten_uses_bounded_local_ranges_and_locally_generated_ids() -> None:
@@ -401,7 +532,7 @@ class _TeachingProvider(UnifiedAudioAdapter):
         context: TeachingChatContext,
     ) -> TeachingChatResponse:
         self.chat_contexts.append(context)
-        return TeachingChatResponse.model_validate(_chat_payload())
+        return TeachingChatResponse.model_validate(_chat_response_payload())
 
 
 class _AnalysisOnlyProvider(UnifiedAudioAdapter):

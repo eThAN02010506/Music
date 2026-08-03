@@ -8,6 +8,7 @@ build/
 .DS_Store
 .idea/
 .codex_doc_review/
+.codex-restored-chats/
 .pnpm-store/
 src/model/
 test_samples/

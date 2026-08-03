@@ -6,18 +6,25 @@ from typing import Any
 from music_insight.teaching.grounding import (
     SourceFact,
     analysis_source_catalog,
+    chat_source_catalog,
 )
 from music_insight.teaching.models import (
     AnalysisEvidenceRef,
+    AnswerEvidence,
+    AnswerTimeRange,
     EmotionalArcPoint,
     KeyMoment,
     LyricsContext,
     MapGenerationContext,
     MusicUnderstandingMap,
+    ListeningTask,
+    PlayerAction,
+    PlayerActionType,
     RelistenEvidence,
     RelistenRequest,
     RelistenResult,
     SectionMarker,
+    TeachingChatContext,
     TeachingChatResponse,
     TeachingTimeSpan,
     UnderstandingEvent,
@@ -107,11 +114,145 @@ def parse_understanding_map(
 def parse_teaching_chat_response(
     payload: dict[str, Any],
     *,
-    output_language: str = "zh",
+    context: TeachingChatContext,
 ) -> TeachingChatResponse:
-    return TeachingChatResponse.model_validate(
-        {**payload, "output_language": output_language}
+    """Expand a compact semantic answer into deterministic player data."""
+
+    catalog = chat_source_catalog(context)
+    requested_ids = _unique_strings(payload.get("source_ids"))[:6]
+    focus_spans = _context_focus_spans(context)
+    invalid_ids = [
+        source_id
+        for source_id in requested_ids
+        if source_id not in catalog
+        or catalog[source_id].span is None
+        or not any(
+            catalog[source_id].span.start_s >= span.start_s - 0.5
+            and catalog[source_id].span.end_s <= span.end_s + 0.5
+            for span in focus_spans
+            if catalog[source_id].span is not None
+        )
+    ]
+    if invalid_ids:
+        raise ValueError(
+            "模型引用了当前复听范围之外的证据：" + "、".join(invalid_ids[:3])
+        )
+    selected_facts = [
+        catalog[source_id]
+        for source_id in requested_ids
+    ]
+    time_ranges = [
+        AnswerTimeRange(
+            id=f"range.source.{index}",
+            start_s=fact.span.start_s,
+            end_s=fact.span.end_s,
+            label=_localized_text(
+                context.output_language,
+                f"Evidence {index + 1}",
+                f"证据片段 {index + 1}",
+            ),
+            purpose=_localized_text(
+                context.output_language,
+                "Check the cited audible fact",
+                "核对被引用的听觉事实",
+            ),
+        )
+        for index, fact in enumerate(selected_facts)
+        if fact.span is not None
+    ]
+    if not time_ranges:
+        time_ranges = [_context_time_range(context)]
+
+    evidence = [
+        AnswerEvidence(
+            id=f"answer.evidence.{index}",
+            statement=fact.statement,
+            claim_type=fact.claim_type,
+            dimension=fact.dimension,
+            source_refs=[fact.source_id],
+            time_range_ids=[time_ranges[index].id],
+            confidence=(
+                fact.confidence
+                if fact.confidence is not None
+                else float(payload["confidence"])
+            ),
+        )
+        for index, fact in enumerate(selected_facts)
+    ]
+    insufficient = bool(payload["insufficient_evidence"]) or not evidence
+    confidence = float(payload["confidence"])
+    if insufficient:
+        confidence = min(confidence, 0.4)
+    focus = evidence[0].dimension if evidence else "other"
+    first_range = time_ranges[0]
+    return TeachingChatResponse(
+        output_language=context.output_language,
+        answer=payload["answer"],
+        time_ranges=time_ranges,
+        evidence=evidence,
+        listening_task=ListeningTask(
+            instruction=_localized_text(
+                context.output_language,
+                "Loop this range and follow only the cited sound change.",
+                "循环这一时间范围，只跟随被引用的声音变化。",
+            ),
+            focus=focus,
+            time_range_id=first_range.id,
+        ),
+        suggested_questions=payload.get("suggested_questions") or [],
+        player_actions=[
+            PlayerAction(
+                type=PlayerActionType.LOOP_RANGE,
+                time_range_id=first_range.id,
+                label=_localized_text(
+                    context.output_language,
+                    "Loop cited evidence",
+                    "循环引用证据",
+                ),
+            )
+        ],
+        alternative_readings=payload.get("alternative_readings") or [],
+        warnings=[],
+        confidence=confidence,
+        relistened=any(
+            fact.source_id.startswith("relisten:") for fact in selected_facts
+        ),
+        insufficient_evidence=insufficient,
     )
+
+
+def _context_time_range(context: TeachingChatContext) -> AnswerTimeRange:
+    span = _context_focus_spans(context)[0]
+    return AnswerTimeRange(
+        id="range.context",
+        start_s=span.start_s,
+        end_s=span.end_s,
+        label=_localized_text(
+            context.output_language,
+            "Current listening range",
+            "当前复听范围",
+        ),
+        purpose=_localized_text(
+            context.output_language,
+            "Provide a playback reference for this answer",
+            "为本次回答提供播放参照",
+        ),
+    )
+
+
+def _context_focus_spans(context: TeachingChatContext) -> list[TeachingTimeSpan]:
+    if context.compare_ranges:
+        return context.compare_ranges
+    if context.selected_range is not None:
+        return [context.selected_range]
+    start_s = max(0.0, context.current_time_s - 7.5)
+    end_s = min(context.duration_s, start_s + 15.0)
+    start_s = max(0.0, end_s - 15.0)
+    return [TeachingTimeSpan(start_s=start_s, end_s=end_s)]
+
+
+def _localized_text(language: str, english: str, chinese: str) -> str:
+    return english if language == "en" else chinese
 
 
 def parse_relisten_result(
