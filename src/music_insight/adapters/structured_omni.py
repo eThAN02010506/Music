@@ -140,6 +140,7 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
         model: str | None = None,
         chunk_seconds: float = 30.0,
         chunk_overlap_seconds: float = 1.5,
+        deadline_seconds: float | None = None,
     ) -> None:
         self.endpoint = endpoint.rstrip("/")
         self._resolved_model = model
@@ -147,6 +148,11 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
         self.chunk_overlap_seconds = max(
             0.0,
             min(float(chunk_overlap_seconds), self.chunk_seconds / 3),
+        )
+        self.deadline_seconds = (
+            max(60.0, float(deadline_seconds))
+            if deadline_seconds is not None
+            else None
         )
 
     @asynccontextmanager
@@ -180,11 +186,44 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
         progress: Callable[[str, float, str], Awaitable[None] | None] | None = None,
     ) -> UnifiedAudioResult:
         async with self._request_scope():
-            return await StructuredOmniAnalysisWorkflow(self).analyze(
+            if self.deadline_seconds is None:
+                return await StructuredOmniAnalysisWorkflow(self).analyze(
+                    asset,
+                    dsp,
+                    progress,
+                )
+            return await self._run_with_deadline(
                 asset,
                 dsp,
                 progress,
             )
+
+    async def _run_with_deadline(
+        self,
+        asset: AudioAsset,
+        dsp: DspResult,
+        progress: Callable[[str, float, str], Awaitable[None] | None] | None,
+    ) -> UnifiedAudioResult:
+        """Cap the whole-song analysis so a half-dead endpoint cannot stall it.
+
+        A timeout here surfaces as a batch-level degradation (partial chunks
+        plus local DSP), matching the "model unavailable -> DSP still usable"
+        contract, instead of leaving the job running for hours.
+        """
+
+        deadline_at = asyncio.get_running_loop().time() + self.deadline_seconds
+        try:
+            async with asyncio.timeout(self.deadline_seconds):
+                return await StructuredOmniAnalysisWorkflow(self).analyze(
+                    asset,
+                    dsp,
+                    progress,
+                    deadline_at=deadline_at,
+                )
+        except TimeoutError as exc:
+            raise RuntimeError(
+                "统一模型分析超过整体时限，已停止继续分块；本地 DSP 结果仍可用。"
+            ) from exc
 
     def should_abort_chunking(self, error: Exception) -> bool:
         """Return whether one provider failure invalidates the remaining batch."""
@@ -393,6 +432,7 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
         start_s: float,
         end_s: float,
         language_hint: str | None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         duration_s = end_s - start_s
         request = chunk_analysis_request(
@@ -402,7 +442,7 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
             language_hint=language_hint,
             response_format=self._chunk_response_format(),
         )
-        return await self._chat_json(request, timeout=600.0)
+        return await self._chat_json(request, timeout=timeout or 600.0)
 
     async def _recover_missing(
         self,
@@ -411,6 +451,7 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
         duration_s: float,
         language_hint: str | None,
         missing: list[str],
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         request = missing_recovery_request(
             model=model,
@@ -420,7 +461,7 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
             missing=missing,
             response_format=self._recovery_response_format(missing),
         )
-        return await self._chat_json(request, timeout=600.0)
+        return await self._chat_json(request, timeout=timeout or 600.0)
 
     async def _recover_lyrics_quality(
         self,
@@ -429,6 +470,7 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
         duration_s: float,
         language_hint: str | None,
         issues: list[str],
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         request = lyrics_quality_recovery_request(
             model=model,
@@ -440,7 +482,7 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
                 ["lyrics", "vocals_detected", "vocal_confidence"]
             ),
         )
-        return await self._chat_json(request, timeout=600.0)
+        return await self._chat_json(request, timeout=timeout or 600.0)
 
     async def _synthesize_report(
         self,

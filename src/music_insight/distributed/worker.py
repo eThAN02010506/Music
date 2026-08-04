@@ -18,6 +18,7 @@ from music_insight.distributed.jobs import (
 from music_insight.distributed.payloads import DistributedAnalysisPayload
 from music_insight.pipeline.resources import model_resources
 from music_insight.schemas import AudioAsset
+from music_insight.storage.assets import content_cache_key
 
 
 def _validated_worker_asset(
@@ -38,6 +39,13 @@ def _validated_worker_asset(
         raise ValueError("Queued audio changed after submission.")
     if size > settings.max_upload_mb * 1024 * 1024:
         raise ValueError("Queued audio exceeds the configured size limit.")
+    if payload.content_key:
+        actual = content_cache_key(path)
+        if actual != payload.content_key:
+            raise ValueError(
+                "Queued audio content does not match the submission hash; "
+                "the file may have been replaced."
+            )
     return payload.asset.model_copy(update={"path": path})
 
 

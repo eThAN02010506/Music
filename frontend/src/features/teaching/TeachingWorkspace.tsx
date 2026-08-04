@@ -172,7 +172,7 @@ function LearningProgress({
   instrumental: boolean;
   onConceptToggle: (concept: string) => Promise<void>;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const concepts = instrumental
     ? TRAINING_CONCEPTS.filter((concept) => concept !== "歌词与音乐关系")
     : TRAINING_CONCEPTS;
@@ -190,7 +190,7 @@ function LearningProgress({
       </header>
       <p>
         {t("只有你确认“已经能听出”后才会记录；系统不会因为回答过一次就自动判定学会。")}
-        {nextConcept && ` ${t("下一项建议关注：")}${t(nextConcept)}。`}
+        {nextConcept && ` ${t("下一项建议关注：")}${t(nextConcept)}${locale === "en" ? "." : "。"}`}
       </p>
       <div className="concept-progress-list">
         {concepts.map((concept) => (

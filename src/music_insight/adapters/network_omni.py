@@ -99,6 +99,7 @@ class NetworkOmniAdapter(UnifiedAudioAdapter):
         comni_idle_timeout: float = 600.0,
         comni_request_timeout: float = 600.0,
         comni_max_message_bytes: int = 8 * 1024 * 1024,
+        deadline_seconds: float | None = None,
         registry: NetworkOmniProviderRegistry | None = None,
         probe: ProbeFunction = probe_model_service,
     ) -> None:
@@ -118,6 +119,7 @@ class NetworkOmniAdapter(UnifiedAudioAdapter):
                     model=model or capabilities.model,
                     chunk_seconds=chunk_seconds,
                     chunk_overlap_seconds=chunk_overlap_seconds,
+                    deadline_seconds=deadline_seconds,
                     display_name=capabilities.service,
                 ),
             )
@@ -129,6 +131,7 @@ class NetworkOmniAdapter(UnifiedAudioAdapter):
                     model=model or capabilities.model,
                     chunk_seconds=comni_chunk_seconds,
                     chunk_overlap_seconds=chunk_overlap_seconds,
+                    deadline_seconds=deadline_seconds,
                     client=MiniCpmGatewayClient(
                         self.endpoint,
                         open_timeout=comni_open_timeout,

@@ -124,12 +124,22 @@ def get_auth_rate_limiter(request: Request) -> AuthRateLimiter:
 
 
 def set_session_cookie(response: Response, request: Request, token: str) -> None:
+    configured_secure = getattr(
+        getattr(request.app.state, "settings", None),
+        "cookie_secure",
+        None,
+    )
+    secure = (
+        configured_secure
+        if configured_secure is not None
+        else request.url.scheme == "https"
+    )
     response.set_cookie(
         SESSION_COOKIE,
         token,
         max_age=SESSION_MAX_AGE_SECONDS,
         httponly=True,
-        secure=request.url.scheme == "https",
+        secure=secure,
         samesite="lax",
         path="/",
     )

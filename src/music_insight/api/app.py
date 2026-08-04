@@ -67,6 +67,7 @@ async def _lifespan(api: FastAPI):
     api.state.asset_gc_report = None
     api.state.asset_gc_error = None
     settings = get_settings()
+    api.state.settings = settings
     history_store = await run_in_threadpool(get_history_store, settings)
     if getattr(api.state, "teaching_repository", None) is None:
         from music_insight.api.teaching import TeachingStore
@@ -118,7 +119,14 @@ async def _lifespan(api: FastAPI):
     )
     if isinstance(api.state.jobs, RedisAnalysisJobStore):
         terminal_reconciler = asyncio.create_task(
-            reconcile_terminal_history(api.state.jobs, history_store)
+            reconcile_terminal_history(
+                api.state.jobs,
+                history_store,
+                stale_before=datetime.now(UTC)
+                - timedelta(
+                    seconds=settings.celery_soft_time_limit_seconds
+                ),
+            )
         )
 
     try:
@@ -253,6 +261,15 @@ def create_app(
                             status_code=403,
                         )
         response = await call_next(request)
+        if request.url.path in {"/", "/docs"}:
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; "
+                "connect-src 'self'",
+            )
         if request.url.path not in {
             "/",
             "/api/info",

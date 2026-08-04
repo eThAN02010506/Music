@@ -233,6 +233,7 @@ export const api = {
       strategy?: TeachingGuideStrategy;
       output_language?: "zh" | "en";
     } = {},
+    signal?: AbortSignal,
   ) =>
     request<TeachingGuideResponse>(
       `/history/${encodeURIComponent(id)}/teaching-guide`,
@@ -245,6 +246,7 @@ export const api = {
           output_language: options.output_language ?? "zh",
         }),
       },
+      { signal },
     ),
   teachingConversations: (id: string, signal?: AbortSignal) =>
     request<TeachingConversation[]>(
@@ -252,7 +254,11 @@ export const api = {
       undefined,
       { signal },
     ),
-  createTeachingConversation: (id: string, title?: string) =>
+  createTeachingConversation: (
+    id: string,
+    title?: string,
+    signal?: AbortSignal,
+  ) =>
     request<TeachingConversation>(
       `/history/${encodeURIComponent(id)}/conversations`,
       {
@@ -260,6 +266,7 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: title || null }),
       },
+      { signal },
     ),
   teachingConversation: (
     id: string,

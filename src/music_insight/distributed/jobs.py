@@ -145,9 +145,6 @@ if current == 'completed' or current == 'failed' or current == 'cancelled' then
   return {3, tonumber(redis.call('HGET', KEYS[1], 'revision') or '0')}
 end
 local requested = ARGV[2]
-if redis.call('HGET', KEYS[1], 'cancel_requested') == '1' then
-  requested = 'cancelled'
-end
 local stage = requested
 local progress = redis.call('HGET', KEYS[1], 'progress') or '0'
 local message = ARGV[3]

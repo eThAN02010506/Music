@@ -76,7 +76,7 @@ export function useTeachingExperience(historyId: string | null) {
           strategy: "evidence",
           force,
           output_language: outputLanguage,
-        });
+        }, controller.signal);
         if (current()) setGuide(next);
       } catch (cause) {
         if (!current() || isAbortError(cause)) return;

@@ -31,6 +31,9 @@ export function StemMixer({
   const [muted, setMuted] = useState<Set<StemName>>(new Set());
   const [solo, setSolo] = useState<StemName | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const controllerRef = useRef<AbortController | null>(null);
+  const activeRef = useRef(true);
+  const loadRef = useRef<() => void>(() => {});
 
   const clearPoll = useCallback(() => {
     if (pollRef.current !== null) {
@@ -39,26 +42,39 @@ export function StemMixer({
     }
   }, []);
 
+  const schedulePoll = useCallback(() => {
+    if (pollRef.current !== null) return;
+    pollRef.current = setTimeout(() => {
+      pollRef.current = null;
+      loadRef.current();
+    }, STEM_POLL_MS);
+  }, []);
+
+  const load = useCallback(async () => {
+    const controller = controllerRef.current;
+    if (!controller) return;
+    try {
+      const next = await api.historyStems(historyId, controller.signal);
+      if (!activeRef.current) return;
+      setStatus(next);
+      setError("");
+      if (next.status === "processing") {
+        schedulePoll();
+      }
+    } catch (cause) {
+      if (!activeRef.current || isAbortError(cause)) return;
+      setError(cause instanceof Error ? cause.message : "无法读取分轨状态");
+    }
+  }, [historyId, schedulePoll]);
+
+  useEffect(() => {
+    loadRef.current = () => { void load(); };
+  }, [load]);
+
   useEffect(() => {
     const controller = new AbortController();
-    let active = true;
-    const load = async () => {
-      try {
-        const next = await api.historyStems(historyId, controller.signal);
-        if (!active) return;
-        setStatus(next);
-        setError("");
-        if (next.status === "processing") {
-          pollRef.current = setTimeout(() => {
-            pollRef.current = null;
-            void load();
-          }, STEM_POLL_MS);
-        }
-      } catch (cause) {
-        if (!active || isAbortError(cause)) return;
-        setError(cause instanceof Error ? cause.message : "无法读取分轨状态");
-      }
-    };
+    controllerRef.current = controller;
+    activeRef.current = true;
     setStatus(null);
     setLoaded(new Set());
     setFailed(new Set());
@@ -68,12 +84,12 @@ export function StemMixer({
     player.setStemMixActive(false);
     void load();
     return () => {
-      active = false;
+      activeRef.current = false;
       controller.abort();
       clearPoll();
       player.setStemMixActive(false);
     };
-  }, [clearPoll, historyId, player]);
+  }, [clearPoll, historyId, load, player]);
 
   const tracks = useMemo(
     () => (status?.stems ?? []).map((track) => ({
@@ -93,13 +109,21 @@ export function StemMixer({
     setError("");
     try {
       const next = await api.generateHistoryStems(historyId);
+      if (!activeRef.current) return;
       setStatus(next);
       setLoaded(new Set());
       setFailed(new Set());
+      if (next.status === "processing") {
+        schedulePoll();
+      }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "分轨生成失败");
+      if (activeRef.current) {
+        setError(cause instanceof Error ? cause.message : "分轨生成失败");
+      }
     } finally {
-      setGenerating(false);
+      if (activeRef.current) {
+        setGenerating(false);
+      }
     }
   };
 

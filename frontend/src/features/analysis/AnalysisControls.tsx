@@ -345,7 +345,7 @@ export function ModelSettings({
 }
 
 export function ProgressPanel({ job, onCancel }: { job: JobSnapshot; onCancel: () => void }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const running = job.state === "queued" || job.state === "running";
   const progressPercent = Math.max(
     0,
@@ -368,7 +368,7 @@ export function ProgressPanel({ job, onCancel }: { job: JobSnapshot; onCancel: (
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={progressPercent}
-        aria-valuetext={`${stageLabel}，${progressPercent}%`}
+        aria-valuetext={`${stageLabel}${locale === "en" ? ", " : "，"}${progressPercent}%`}
       >
         <span style={{ width: `${progressPercent}%` }} />
       </div>

@@ -1,5 +1,5 @@
 import { percent } from "../../format";
-import { matchesUiLanguage, useI18n } from "../../i18n";
+import { localizedProse, matchesUiLanguage, useI18n } from "../../i18n";
 import type {
   AnalysisEvidenceRef,
   MusicUnderstandingMap,
@@ -43,7 +43,7 @@ function UnderstandingEventCard({
   event: UnderstandingEvent;
   index: number;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   return (
     <article className="understanding-event">
       <header>
@@ -55,16 +55,34 @@ function UnderstandingEventCard({
       </header>
       <div className="event-felt">
         <span>{t("感受到什么")}</span>
-        <h3>{event.interpretation}</h3>
+        <h3>
+          {localizedProse(
+            event.interpretation,
+            locale,
+            t("回答未通过界面语言一致性检查，暂不展示原文。"),
+          )}
+        </h3>
       </div>
       <div className="event-step">
         <span>{t("听到了什么")}</span>
-        <p>{event.observation}</p>
+        <p>
+          {localizedProse(
+            event.observation,
+            locale,
+            t("回答未通过界面语言一致性检查，暂不展示原文。"),
+          )}
+        </p>
         <EvidenceList values={event.audio_evidence} />
       </div>
       <div className="event-step">
         <span>{t("它在表达中起什么作用")}</span>
-        <p>{event.expressive_role}</p>
+        <p>
+          {localizedProse(
+            event.expressive_role,
+            locale,
+            t("回答未通过界面语言一致性检查，暂不展示原文。"),
+          )}
+        </p>
       </div>
       {event.lyrics_context.length > 0 && (
         <div className="event-lyrics">

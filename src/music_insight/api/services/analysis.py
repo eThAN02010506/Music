@@ -26,6 +26,7 @@ from music_insight.distributed.payloads import DistributedAnalysisPayload
 from music_insight.pipeline.orchestrator import AnalysisOrchestrator
 from music_insight.reporting.markdown import render_markdown_report
 from music_insight.schemas import AnalysisResult, AudioAsset
+from music_insight.storage.assets import content_cache_key
 
 from .uploads import save_audio_upload
 
@@ -141,18 +142,53 @@ class _HistoryProgressObserver:
         )
         if not should_persist:
             return
-        await run_in_threadpool(
-            self.history.update,
-            current.id,
-            state=current.state.value,
-            updated_at=current.updated_at,
-            result=result if current.state == JobState.COMPLETED else None,
-            error=current.error,
-            user_id=self.user_id,
-        )
+        await self._persist(current, result)
         self.last_stage = current.stage
         self.last_progress = current.progress
         self.last_persisted_at = now
+
+    async def _persist(
+        self,
+        current: JobSnapshot,
+        result: AnalysisResult | None,
+    ) -> None:
+        """Write a terminal state with bounded retries.
+
+        The in-memory job backend has no reconciler to backfill a lost terminal
+        row, so a transient SQLite write failure on a completed/failed/
+        cancelled state must be retried rather than dropped. Progress-only
+        writes are best-effort (the next progress tick re-persists them).
+        """
+
+        terminal = current.state in {
+            JobState.COMPLETED,
+            JobState.FAILED,
+            JobState.CANCELLED,
+        }
+        attempts = 3 if terminal else 1
+        delay = 0.2
+        last_exc: BaseException | None = None
+        for attempt in range(attempts):
+            try:
+                await run_in_threadpool(
+                    self.history.update,
+                    current.id,
+                    state=current.state.value,
+                    updated_at=current.updated_at,
+                    result=(
+                        result if current.state == JobState.COMPLETED else None
+                    ),
+                    error=current.error,
+                    user_id=self.user_id,
+                )
+                return
+            except BaseException as exc:  # noqa: BLE001 - surfaced via _observe
+                last_exc = exc
+                if attempt + 1 < attempts:
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 1.0)
+        if last_exc is not None:
+            raise last_exc
 
 
 async def _submit_memory_analysis_job(
@@ -336,6 +372,7 @@ async def _submit_distributed_analysis_job(
         model_source=model_source,
         model_endpoint=model_endpoint,
         local_model_path=local_model_path,
+        content_key=content_cache_key(asset.path.resolve()),
     )
     snapshot: JobSnapshot | None = None
     history_created = False

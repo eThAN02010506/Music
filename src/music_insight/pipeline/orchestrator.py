@@ -169,9 +169,37 @@ class AnalysisOrchestrator:
                 lyrics=[],
                 evidence=[error],
             )
-            scene_result = await LocalEvidenceAnalysisAdapter().analyze_scene(
-                asset, asr_result, dsp_result
-            )
+            try:
+                scene_result = await LocalEvidenceAnalysisAdapter().analyze_scene(
+                    asset, asr_result, dsp_result
+                )
+            except Exception as local_exc:
+                # The local fallback must never turn a model failure into a
+                # whole-task failure: keep a minimal DSP-only scene so the
+                # "model unavailable -> DSP still usable" contract holds.
+                scene_result = AudioSceneResult(
+                    model="本地证据融合（降级）",
+                    instruments=[],
+                    sound_events=[],
+                    emotion_timeline=[],
+                    themes=[],
+                    narrative="统一模型不可用，且本地证据融合也失败；DSP 指标仍可参考。",
+                    evidence=[
+                        Evidence(
+                            id="local.evidence.synthesis.unavailable",
+                            source="本地证据融合",
+                            kind=EvidenceType.OBSERVED,
+                            text=(
+                                f"本地证据融合失败：{str(local_exc)[:500]}；"
+                                "已保留可用的本地 DSP 指标。"
+                            ),
+                            confidence=0.0,
+                            metadata={
+                                "error_type": local_exc.__class__.__name__,
+                            },
+                        )
+                    ],
+                )
             scene_result = scene_result.model_copy(
                 update={"evidence": [*scene_result.evidence, error]}
             )
@@ -350,12 +378,22 @@ class AnalysisOrchestrator:
                 "evidence": retained_scene_evidence,
             }
         )
+        local_narrative = next(
+            (
+                item.text
+                for item in retained_scene_evidence
+                if item.id == "local.evidence.synthesis"
+                and item.text.strip()
+            ),
+            "",
+        )
         safe_literary = LiteraryResult(
             model="歌词一致性安全降级",
             themes=[],
             narrative=(
                 "歌词已完成二次校验。由于无法安全地基于新歌词重新综合，"
                 "原歌词相关主题结论已移除；节拍、调性、配器和声音事件仍可参考。"
+                + (f" {local_narrative}" if local_narrative else "")
             ),
             evidence=[consistency],
         )

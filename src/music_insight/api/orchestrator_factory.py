@@ -88,6 +88,7 @@ def build_orchestrator(
             model=settings.omni_model,
             chunk_seconds=settings.omni_chunk_seconds,
             chunk_overlap_seconds=settings.omni_chunk_overlap_seconds,
+            deadline_seconds=settings.analysis_deadline_seconds,
         )
     else:
         try:
@@ -114,6 +115,7 @@ def build_orchestrator(
             comni_idle_timeout=settings.comni_idle_timeout_seconds,
             comni_request_timeout=settings.comni_request_timeout_seconds,
             comni_max_message_bytes=settings.comni_max_message_mb * 1024 * 1024,
+            deadline_seconds=settings.analysis_deadline_seconds,
         )
     model_limit = (
         1 if model_source == "local" else settings.omni_max_concurrency

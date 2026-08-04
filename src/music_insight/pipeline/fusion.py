@@ -45,10 +45,7 @@ class FusionEngine:
                 )
         error_evidence = [item for item in evidence if item.id.endswith(".error")]
         if error_evidence:
-            warnings.append(
-                "部分模块调用失败，已返回其余可用结果："
-                + "；".join(item.text for item in error_evidence)
-            )
+            warnings.append(_summarize_error_warning(error_evidence))
         rejected_evidence = [item for item in evidence if item.id.endswith(".rejected")]
         if rejected_evidence:
             warnings.append(
@@ -171,3 +168,28 @@ def _summarize_quality_warning(values: list[Evidence]) -> str:
     if len(unique_texts) > 3:
         summary += f"；另有 {len(unique_texts) - 3} 类提示"
     return "质量提示：" + summary
+
+
+def _summarize_error_warning(values: list[Evidence]) -> str:
+    """Collapse per-chunk model failures by error type instead of by index.
+
+    Chunk error text embeds the chunk number (``第 N 个音频分块分析失败``), so
+    plain text deduplication never collapses 12 identical failures. Grouping by
+    the recorded ``error_type`` produces one readable warning with a chunk
+    count, matching FR-PV-006.
+    """
+
+    by_type: dict[str, list[Evidence]] = {}
+    for item in values:
+        error_type = item.metadata.get("error_type") or "unknown"
+        by_type.setdefault(str(error_type), []).append(item)
+    parts: list[str] = []
+    for error_type, items in sorted(by_type.items()):
+        chunk_count = sum(".chunk." in item.id for item in items)
+        sample = next(
+            (item.text for item in items if item.text.strip()),
+            error_type,
+        )
+        suffix = f"（涉及 {chunk_count} 个音频分块）" if chunk_count > 1 else ""
+        parts.append(f"{sample}{suffix}")
+    return "部分模块调用失败，已返回其余可用结果：" + "；".join(parts[:5])

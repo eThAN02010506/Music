@@ -1,6 +1,7 @@
 import type { Span } from "../../types";
 import {
   clampTime,
+  limitSelectionRange,
   normalizeRange,
   sanitizePlayerAction,
 } from "./playerController.ts";
@@ -117,7 +118,7 @@ export class PlayerStore {
     const updatePlayback = () => {
       this.syncFollowers(media, true);
       this.patch({ playing: !media.paused });
-      if (!media.paused && this.snapshot.activePlayback) {
+      if (!media.paused) {
         this.startScheduler();
       } else {
         this.stopScheduler();
@@ -220,7 +221,9 @@ export class PlayerStore {
 
   setRange(slot: PlayerRangeSlot, range: Span | null): void {
     const normalized = range
-      ? normalizeRange(range, this.snapshot.duration)
+      ? slot === "selection"
+        ? limitSelectionRange(range, this.snapshot.duration)
+        : normalizeRange(range, this.snapshot.duration)
       : null;
     if (slot === "selection") {
       this.patch({ selectedRange: normalized });
@@ -357,7 +360,6 @@ export class PlayerStore {
       this.frameHandle !== null
       || !this.media
       || this.media.paused
-      || !this.snapshot.activePlayback
     ) return;
     this.frameHandle = this.scheduler.request(() => {
       this.frameHandle = null;
@@ -372,7 +374,7 @@ export class PlayerStore {
         ),
         playing: !media.paused,
       });
-      if (this.snapshot.activePlayback && !media.paused) {
+      if (!media.paused) {
         this.startScheduler();
       }
     });

@@ -21,6 +21,20 @@ export function normalizeRange(
   return { start_s, end_s };
 }
 
+export function limitSelectionRange(
+  range: Span,
+  duration: number,
+  maxSeconds = 30,
+): Span | null {
+  const normalized = normalizeRange(range, duration);
+  if (!normalized) return null;
+  if (normalized.end_s - normalized.start_s <= maxSeconds) return normalized;
+  return {
+    start_s: normalized.start_s,
+    end_s: normalized.start_s + maxSeconds,
+  };
+}
+
 export function rangeAround(
   currentTime: number,
   duration: number,

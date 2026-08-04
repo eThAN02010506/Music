@@ -58,6 +58,7 @@ class StructuredOmniWorkflowAdapter(Protocol):
         start_s: float,
         end_s: float,
         language_hint: str | None,
+        timeout: float | None = None,
     ) -> dict[str, Any]: ...
 
     def should_abort_chunking(self, error: Exception) -> bool: ...
@@ -82,6 +83,7 @@ class StructuredOmniWorkflowAdapter(Protocol):
         duration_s: float,
         language_hint: str | None,
         issues: list[str],
+        timeout: float | None = None,
     ) -> dict[str, Any]: ...
 
     async def _recover_missing(
@@ -91,6 +93,7 @@ class StructuredOmniWorkflowAdapter(Protocol):
         duration_s: float,
         language_hint: str | None,
         missing: list[str],
+        timeout: float | None = None,
     ) -> dict[str, Any]: ...
 
     def _deduplicate_lyrics(
@@ -134,6 +137,8 @@ class ChunkAnalysisState:
     )
     expected_chunks: int = 0
     batch_aborted: bool = False
+    consecutive_error_family: str | None = None
+    consecutive_error_count: int = 0
 
 
 class StructuredOmniAnalysisWorkflow:
@@ -147,6 +152,8 @@ class StructuredOmniAnalysisWorkflow:
         asset: AudioAsset,
         dsp: DspResult,
         progress: ProgressCallback = None,
+        *,
+        deadline_at: float | None = None,
     ) -> UnifiedAudioResult:
         model = await self.adapter._model()
         total_chunks = self.adapter._chunk_count(asset.path)
@@ -166,6 +173,7 @@ class StructuredOmniAnalysisWorkflow:
                 end_s=end_s,
                 language_hint=asset.language_hint,
                 progress=progress,
+                deadline_at=deadline_at,
             )
             if not should_continue:
                 break
@@ -197,6 +205,7 @@ class StructuredOmniAnalysisWorkflow:
         end_s: float,
         language_hint: str | None,
         progress: ProgressCallback,
+        deadline_at: float | None = None,
     ) -> bool:
         started_at = perf_counter()
         await self.adapter._notify(
@@ -205,6 +214,27 @@ class StructuredOmniAnalysisWorkflow:
             (index - 1) / max(1, total_chunks) * 0.88,
             f"模型正在分析第 {index}/{total_chunks} 个音频分块",
         )
+        remaining = (
+            max(0.0, deadline_at - perf_counter())
+            if deadline_at is not None
+            else None
+        )
+        if remaining is not None and remaining <= 0:
+            self._record_batch_abort(
+                state,
+                index=index,
+                total_chunks=total_chunks,
+                start_s=start_s,
+                end_s=end_s,
+                error=TimeoutError("整体分析时限已到"),
+            )
+            await self._notify_chunk_complete(
+                index=index,
+                total_chunks=total_chunks,
+                started_at=started_at,
+                progress=progress,
+            )
+            return False
         try:
             payload = await self.adapter._analyze_chunk(
                 model=model,
@@ -212,6 +242,7 @@ class StructuredOmniAnalysisWorkflow:
                 start_s=start_s,
                 end_s=end_s,
                 language_hint=language_hint,
+                timeout=remaining,
             )
             parsed = self.adapter._parse_chunk(
                 payload,
@@ -221,6 +252,16 @@ class StructuredOmniAnalysisWorkflow:
             )
         except Exception as exc:
             if self.adapter.should_abort_chunking(exc):
+                self._record_batch_abort(
+                    state,
+                    index=index,
+                    total_chunks=total_chunks,
+                    start_s=start_s,
+                    end_s=end_s,
+                    error=exc,
+                )
+                should_continue = False
+            elif self._should_abort_consecutive_errors(state, exc):
                 self._record_batch_abort(
                     state,
                     index=index,
@@ -257,6 +298,7 @@ class StructuredOmniAnalysisWorkflow:
                 start_s=start_s,
                 end_s=end_s,
                 language_hint=language_hint,
+                timeout=remaining,
             )
             if (
                 not parsed["lyrics"]
@@ -272,6 +314,7 @@ class StructuredOmniAnalysisWorkflow:
                     start_s=start_s,
                     end_s=end_s,
                     language_hint=language_hint,
+                    timeout=remaining,
                 )
         except Exception as exc:
             if not self.adapter.should_abort_chunking(exc):
@@ -312,6 +355,8 @@ class StructuredOmniAnalysisWorkflow:
             chunk_start=start_s,
             chunk_end=end_s,
         )
+        state.consecutive_error_family = None
+        state.consecutive_error_count = 0
 
         state.lyrics.extend(parsed["lyrics"])
         state.instruments.extend(parsed["instruments"])
@@ -430,6 +475,7 @@ class StructuredOmniAnalysisWorkflow:
         start_s: float,
         end_s: float,
         language_hint: str | None,
+        timeout: float | None = None,
     ) -> bool:
         original_lyrics = list(parsed["lyrics"])
         cleaned_lyrics, quality_issues = self.adapter._filter_lyrics_quality(
@@ -446,6 +492,7 @@ class StructuredOmniAnalysisWorkflow:
                 duration_s=end_s - start_s,
                 language_hint=language_hint,
                 issues=quality_issues,
+                timeout=timeout,
             )
             recovered = self.adapter._parse_chunk(
                 recovered_payload,
@@ -526,6 +573,7 @@ class StructuredOmniAnalysisWorkflow:
         start_s: float,
         end_s: float,
         language_hint: str | None,
+        timeout: float | None = None,
     ) -> None:
         missing = ["lyrics"]
         if (
@@ -540,6 +588,7 @@ class StructuredOmniAnalysisWorkflow:
                 duration_s=end_s - start_s,
                 language_hint=language_hint,
                 missing=missing,
+                timeout=timeout,
             )
             recovered = self.adapter._parse_chunk(
                 recovered_payload,
@@ -659,6 +708,28 @@ class StructuredOmniAnalysisWorkflow:
                 },
             )
         )
+
+    @staticmethod
+    def _should_abort_consecutive_errors(
+        state: ChunkAnalysisState,
+        error: Exception,
+    ) -> bool:
+        """Abort a batch after repeated transport-level failures.
+
+        ``should_abort_chunking`` handles a single error that proves the whole
+        endpoint is unusable (Comni). This state machine catches the other
+        common failure shape for OpenAI-compatible endpoints: a dead or half-dead
+        server keeps raising the same transport error for every chunk, so each
+        chunk wastes a full connect/read timeout before failing.
+        """
+
+        family = _error_family(error)
+        if state.consecutive_error_family == family:
+            state.consecutive_error_count += 1
+        else:
+            state.consecutive_error_family = family
+            state.consecutive_error_count = 1
+        return state.consecutive_error_count >= 3
 
     def _record_chunk_error(
         self,
@@ -891,6 +962,30 @@ class StructuredOmniAnalysisWorkflow:
                 evidence=[],
             ),
         )
+
+
+def _error_family(error: Exception) -> str:
+    """Return a coarse family used to detect repeated transport failures.
+
+    HTTP status errors carry their status code so a persistent 5xx is its own
+    family; connection/read errors share one transport family because they all
+    mean the endpoint is unreachable from the worker's perspective.
+    """
+
+    module = type(error).__module__
+    name = type(error).__name__
+    status = getattr(error, "response", None)
+    status_code = getattr(status, "status_code", None)
+    if isinstance(status_code, int) and status_code >= 500:
+        return f"http:{status_code}"
+    if "httpx" in module or name in {
+        "ConnectionError",
+        "TimeoutError",
+        "ReadTimeout",
+        "ConnectTimeout",
+    }:
+        return "transport"
+    return f"{module}.{name}"
 
 
 def _confident_no_vocals(parsed: dict[str, Any]) -> bool:

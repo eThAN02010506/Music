@@ -21,6 +21,7 @@ from music_insight.audio import (
     slice_wav,
 )
 from music_insight.config import Settings
+from music_insight.pipeline.fusion import FusionEngine
 from music_insight.pipeline.orchestrator import AnalysisOrchestrator
 from music_insight.pipeline.preprocess import Preprocessor
 from music_insight.schemas import (
@@ -934,6 +935,171 @@ def test_unified_adapter_aborts_remaining_chunks_when_provider_is_unavailable(
     assert "Worker busy" in batch_error.text
 
 
+def test_unified_adapter_aborts_batch_after_repeated_transport_failures(
+    tmp_path,
+):
+    class FakeRepeatedFailOmni(FakeBatchUnavailableOmni):
+        def should_abort_chunking(self, error):
+            return False
+
+    audio = tmp_path / "repeated-fail.wav"
+    _write_test_audio(audio, seconds=12.0, sample_rate=16_000)
+    adapter = FakeRepeatedFailOmni(
+        endpoint="http://127.0.0.1:9999",
+        model="test-model",
+        chunk_seconds=5,
+        chunk_overlap_seconds=0,
+    )
+
+    result = asyncio.run(adapter.analyze(_asset(audio), DspResult()))
+
+    # 3 chunks, all raising the same transport-family error -> abort on the 3rd.
+    assert adapter.analysis_calls == 3
+    batch_error = next(
+        item for item in result.scene.evidence if item.id == "omni.batch.error"
+    )
+    assert batch_error.metadata["failed_chunk"] == 3
+    assert batch_error.metadata["skipped_chunks"] == 0
+
+
+def test_unified_adapter_resets_consecutive_error_count_on_success(tmp_path):
+    class FakeRecoveringFailOmni(FakeBatchUnavailableOmni):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._failures_remaining = 2
+
+        def should_abort_chunking(self, error):
+            return False
+
+        async def _analyze_chunk(self, **kwargs):
+            if self._failures_remaining > 0:
+                self._failures_remaining -= 1
+                self.analysis_calls += 1
+                raise RuntimeError("Worker busy")
+            payload = {
+                "lyrics": [],
+                "instruments": [],
+                "sound_events": [],
+                "emotion_timeline": [],
+                "themes": [],
+                "narrative": "recovered",
+                "vocals_detected": None,
+                "vocal_confidence": None,
+            }
+            self.analysis_calls += 1
+            return payload
+
+        async def _synthesize_report(self, **kwargs):
+            return "narrative", [], [], []
+
+    audio = tmp_path / "recovering-fail.wav"
+    _write_test_audio(audio, seconds=12.0, sample_rate=16_000)
+    adapter = FakeRecoveringFailOmni(
+        endpoint="http://127.0.0.1:9999",
+        model="test-model",
+        chunk_seconds=5,
+        chunk_overlap_seconds=0,
+    )
+
+    result = asyncio.run(adapter.analyze(_asset(audio), DspResult()))
+
+    # Two failures, then a success resets the counter, so the batch continues
+    # to the end instead of aborting.
+    assert adapter.analysis_calls == 3
+    assert not any(
+        item.id == "omni.batch.error" for item in result.scene.evidence
+    )
+
+
+def test_fusion_collapses_repeated_chunk_errors_by_type(tmp_path):
+    audio = tmp_path / "song.wav"
+    _write_test_audio(audio)
+    errors = [
+        Evidence(
+            id=f"omni.chunk.{index}.error",
+            source="test",
+            kind=EvidenceType.OBSERVED,
+            text=f"第 {index} 个音频分块分析失败：Worker busy",
+            confidence=0.0,
+            span=TimeSpan(start_s=0, end_s=10),
+            metadata={"error_type": "RuntimeError"},
+        )
+        for index in range(1, 13)
+    ]
+    asr = AsrResult(model="test", lyrics=[], evidence=errors)
+    scene = AudioSceneResult(model="test", evidence=[])
+    literary = LiteraryResult(model="test", themes=[], narrative="n", evidence=[])
+    dsp = DspResult(evidence=[])
+
+    result = FusionEngine().merge(asr, scene, literary, dsp)
+
+    error_warnings = [
+        warning
+        for warning in result.warnings
+        if "部分模块调用失败" in warning
+    ]
+    assert len(error_warnings) == 1
+    # 12 identical chunk errors collapse to one sample plus a chunk count.
+    assert "12 个音频分块" in error_warnings[0]
+    assert error_warnings[0].count("第 ") <= 1
+
+
+def test_unified_adapter_degrades_when_whole_analysis_hits_deadline(
+    tmp_path,
+):
+    import time as _time
+
+    class FakeSlowOmni(QwenOmniUnifiedAdapter):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.analysis_calls = 0
+
+        async def _model(self):
+            return "test-model"
+
+        async def _analyze_chunk(self, **kwargs):
+            self.analysis_calls += 1
+            await asyncio.sleep(0.5)
+            return {
+                "lyrics": [],
+                "instruments": [],
+                "sound_events": [],
+                "emotion_timeline": [],
+                "themes": [],
+                "narrative": "",
+                "vocals_detected": None,
+                "vocal_confidence": None,
+            }
+
+    audio = tmp_path / "slow.wav"
+    _write_test_audio(audio, seconds=4.0, sample_rate=16_000)
+    adapter = FakeSlowOmni(
+        endpoint="http://127.0.0.1:9999",
+        model="test-model",
+        chunk_seconds=2,
+        chunk_overlap_seconds=0,
+        deadline_seconds=1.0,
+    )
+    orchestrator = AnalysisOrchestrator(
+        unified=adapter,
+        dsp=FakeDspAdapter(),
+    )
+
+    start = _time.monotonic()
+    result = asyncio.run(orchestrator.analyze(_asset(audio)))
+    elapsed = _time.monotonic() - start
+
+    # The deadline cuts the batch short instead of waiting for every chunk;
+    # the timeout surfaces as a failed-model degradation that keeps DSP.
+    assert elapsed < 3.0
+    assert adapter.analysis_calls <= 2
+    assert result.technical_metrics.bpm == 120.0
+    assert any(
+        item.id in {"omni.error", "omni.final.error"}
+        for item in result.evidence
+    )
+
+
 def test_orchestrators_share_model_concurrency_gate(tmp_path):
     class CountingUnified(FakeUnifiedAdapter):
         def __init__(self):
@@ -1019,6 +1185,24 @@ def test_lyrics_quality_filter_rejects_density_overlap_and_near_duplicates():
     assert any("重叠" in issue for issue in issues)
     assert any("密度" in issue for issue in issues)
     assert any("重复" in issue for issue in issues)
+
+
+def test_lyrics_quality_filter_drops_untimed_lyrics_as_unconfirmed():
+    adapter = QwenOmniUnifiedAdapter(
+        endpoint="http://127.0.0.1:9999", model="test-model"
+    )
+    timed = LyricsSegment(
+        text="等到放晴那天",
+        span=TimeSpan(start_s=0.0, end_s=2.0),
+    )
+    untimed = LyricsSegment(text="没有时间戳的歌词")
+    values = [timed, untimed]
+
+    kept, issues = adapter._filter_lyrics_quality(values)
+
+    # An untimed lyric is not a confirmed lyric and must not enter asr.lyrics.
+    assert kept == [timed]
+    assert any("缺少时间戳" in issue for issue in issues)
 
 
 def test_unified_adapter_relistens_only_bad_lyrics_chunk(tmp_path):

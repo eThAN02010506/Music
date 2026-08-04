@@ -29,6 +29,7 @@ class OpenAIChatAudioAdapter(StructuredOmniAdapter):
         model: str | None = None,
         chunk_seconds: float = 30.0,
         chunk_overlap_seconds: float = 1.5,
+        deadline_seconds: float | None = None,
         display_name: str = "OpenAI-compatible audio",
     ) -> None:
         super().__init__(
@@ -36,6 +37,7 @@ class OpenAIChatAudioAdapter(StructuredOmniAdapter):
             model=model,
             chunk_seconds=chunk_seconds,
             chunk_overlap_seconds=chunk_overlap_seconds,
+            deadline_seconds=deadline_seconds,
         )
         self.source = f"{display_name} · {self.endpoint}"
         self.completions_path = api_path(completions_path)

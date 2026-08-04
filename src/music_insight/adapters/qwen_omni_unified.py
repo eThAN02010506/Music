@@ -16,6 +16,7 @@ class QwenOmniUnifiedAdapter(OpenAIChatAudioAdapter):
         model: str | None = None,
         chunk_seconds: float = 30.0,
         chunk_overlap_seconds: float = 1.5,
+        deadline_seconds: float | None = None,
         display_name: str = "Qwen Omni",
     ) -> None:
         super().__init__(
@@ -25,5 +26,6 @@ class QwenOmniUnifiedAdapter(OpenAIChatAudioAdapter):
             model=model,
             chunk_seconds=chunk_seconds,
             chunk_overlap_seconds=chunk_overlap_seconds,
+            deadline_seconds=deadline_seconds,
             display_name=display_name,
         )

@@ -213,6 +213,7 @@ class MiniCpmGatewayAdapter(StructuredOmniAdapter):
         models_path: str = "/v1/models",
         chunk_seconds: float = 15.0,
         chunk_overlap_seconds: float = 1.5,
+        deadline_seconds: float | None = None,
         client: MiniCpmGatewayClient | None = None,
     ) -> None:
         super().__init__(
@@ -220,6 +221,7 @@ class MiniCpmGatewayAdapter(StructuredOmniAdapter):
             model=model,
             chunk_seconds=chunk_seconds,
             chunk_overlap_seconds=chunk_overlap_seconds,
+            deadline_seconds=deadline_seconds,
         )
         self.models_path = models_path
         self.source = f"MiniCPM-o Comni · {self.endpoint}"

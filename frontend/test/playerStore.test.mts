@@ -178,7 +178,9 @@ test("a manual seek exits controlled playback without pausing normal playback", 
   assert.equal(media.currentTime, 60);
   assert.equal(media.paused, false);
   assert.equal(store.getSnapshot().activePlayback, null);
-  assert.equal(scheduler.pending, 0);
+  // Normal playback now drives the frame scheduler (time snapshots + stem
+  // drift correction), so one frame remains scheduled after the seek.
+  assert.equal(scheduler.pending, 1);
 });
 
 test("stem followers share the master clock and restore the original mix", async () => {

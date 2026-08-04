@@ -113,10 +113,19 @@ class LoopLocalGate:
         if future is None or future.done():
             self._schedule_grants(self._revoke_grant(waiter))
             return
+        deliver = False
         with self._guard:
-            if waiter.state != "granted":
-                return
-        future.set_result(None)
+            # Deliver under the lock so a concurrent revoke/cancel cannot
+            # observe a granted waiter whose future was never resolved.
+            if waiter.state == "granted":
+                deliver = True
+        if deliver:
+            try:
+                future.set_result(None)
+            except (asyncio.InvalidStateError, RuntimeError):
+                # The waiter task was cancelled between scheduling and delivery;
+                # revoke its slot so capacity is not leaked.
+                self._schedule_grants(self._revoke_grant(waiter))
 
     def _abandon(self, waiter: _GateWaiter) -> None:
         grants: list[_GateWaiter] = []

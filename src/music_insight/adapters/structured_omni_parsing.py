@@ -48,7 +48,11 @@ def strings(
         return []
     output: list[str] = []
     for item in value:
-        text = normalize_label(str(item).strip(), label_aliases)
+        if not isinstance(item, str):
+            # A JSON null (or a non-string entry) is not a label; skipping it
+            # prevents the string "None" from leaking into instruments/themes.
+            continue
+        text = normalize_label(item.strip(), label_aliases)
         if meaningful(text, placeholder_values):
             output.append(text)
         if len(output) >= limit:
@@ -394,7 +398,9 @@ def filter_lyrics_quality(
     for item in ordered:
         span = item.span
         if span is None:
-            kept.append(item)
+            # A lyric that cannot be placed on the timeline is not a confirmed
+            # lyric: it must not drive the vocals/lyrics evidence, matching the
+            # ASR verifier path that drops untimed segments (asr_verification).
             issues.append(f"歌词缺少时间戳：{item.text[:24]}")
             continue
 

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   adjacentComparisonRanges,
   clampTime,
+  limitSelectionRange,
   normalizeRange,
   rangeAround,
   sanitizePlayerAction,
@@ -24,6 +25,18 @@ test("normalizeRange rejects reversed and zero-length ranges", () => {
   });
   assert.equal(normalizeRange({ start_s: 5, end_s: 5 }, 10), null);
   assert.equal(normalizeRange({ start_s: 8, end_s: 2 }, 10), null);
+});
+
+test("limitSelectionRange caps manual selections at thirty seconds", () => {
+  assert.deepEqual(limitSelectionRange({ start_s: 0, end_s: 120 }, 120), {
+    start_s: 0,
+    end_s: 30,
+  });
+  assert.deepEqual(limitSelectionRange({ start_s: 10, end_s: 25 }, 120), {
+    start_s: 10,
+    end_s: 25,
+  });
+  assert.equal(limitSelectionRange({ start_s: 8, end_s: 2 }, 10), null);
 });
 
 test("rangeAround keeps a fifteen-second task inside the media duration", () => {

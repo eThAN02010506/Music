@@ -1,5 +1,5 @@
 import { percent } from "../../format";
-import { matchesUiLanguage, useI18n } from "../../i18n";
+import { matchesUiLanguage, localizedProse, useI18n } from "../../i18n";
 import type {
   AnswerTimeRange,
   TeachingChatResponse,
@@ -72,7 +72,13 @@ export function ChatAnswer({
               : ` · ${t("基于已有证据")}`}
         </small>
       </div>
-      <p className="answer-copy">{response.answer}</p>
+      <p className="answer-copy">
+        {localizedProse(
+          response.answer,
+          locale,
+          t("回答未通过界面语言一致性检查，暂不展示原文。"),
+        )}
+      </p>
 
       <div className="answer-time-ranges">
         {response.time_ranges.map((range) => (

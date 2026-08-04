@@ -14,3 +14,9 @@ class DistributedAnalysisPayload(BaseModel):
     model_source: str = Field(pattern=r"^(network|local)$")
     model_endpoint: str | None = None
     local_model_path: str | None = None
+    content_key: str | None = Field(
+        default=None,
+        max_length=96,
+        description="SHA-256 prefix of the source audio, recorded at enqueue "
+        "time so a worker can reject same-size file replacement.",
+    )

@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     max_upload_units: int = Field(default=2, ge=2, le=16)
     auth_kdf_max_concurrency: int = Field(default=4, ge=1, le=16)
     dsp_max_concurrency: int = Field(default=2, ge=1, le=8)
+    # None = infer from request scheme; set true/false to pin the Secure flag
+    # behind a reverse proxy that terminates TLS.
+    cookie_secure: bool | None = None
 
     job_backend: Literal["memory", "redis"] = "memory"
     shared_audio_dir: Path | None = None
@@ -101,6 +104,13 @@ class Settings(BaseSettings):
         le=3600,
     )
     comni_max_message_mb: int = Field(default=8, ge=1, le=64)
+    analysis_deadline_seconds: int = Field(
+        default=1800,
+        ge=60,
+        le=4 * 3600,
+        description="Whole-song model analysis budget; a half-dead endpoint "
+        "cannot stall a task past this ceiling.",
+    )
 
     local_model_root: Path = Field(default=Path("src/model"))
     local_omni_endpoint: str = "http://127.0.0.1:8011"
