@@ -150,7 +150,7 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
             min(float(chunk_overlap_seconds), self.chunk_seconds / 3),
         )
         self.deadline_seconds = (
-            max(60.0, float(deadline_seconds))
+            float(deadline_seconds)
             if deadline_seconds is not None
             else None
         )

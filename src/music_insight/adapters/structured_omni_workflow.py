@@ -724,6 +724,13 @@ class StructuredOmniAnalysisWorkflow:
         """
 
         family = _error_family(error)
+        if _transient_http_error(family):
+            # Rate limiting (429/408) and per-request 4xx rejections are
+            # transient; the batch must keep running and retry rather than
+            # treating a busy upstream as a dead endpoint.
+            state.consecutive_error_family = None
+            state.consecutive_error_count = 0
+            return False
         if state.consecutive_error_family == family:
             state.consecutive_error_count += 1
         else:
@@ -978,6 +985,12 @@ def _error_family(error: Exception) -> str:
     status_code = getattr(status, "status_code", None)
     if isinstance(status_code, int) and status_code >= 500:
         return f"http:{status_code}"
+    if isinstance(status_code, int) and 400 <= status_code < 500:
+        # 4xx is a per-request rejection (bad request, schema, rate limit),
+        # not proof the endpoint is down. Rate limiting (429) is transient and
+        # must never share the transport family with connection failures, or
+        # three consecutive 429s would abort the whole batch.
+        return f"http:{status_code}"
     if "httpx" in module or name in {
         "ConnectionError",
         "TimeoutError",
@@ -986,6 +999,19 @@ def _error_family(error: Exception) -> str:
     }:
         return "transport"
     return f"{module}.{name}"
+
+
+def _transient_http_error(family: str) -> bool:
+    """Return whether an error family represents a retryable, transient failure.
+
+    Rate limits (429/408) and client rejections (4xx) can clear on retry, so a
+    batch must not abort on them. Only connection failures and persistent 5xx
+    indicate the endpoint is actually down.
+    """
+
+    if family.startswith("http:") and not family.startswith("http:5"):
+        return True
+    return False
 
 
 def _confident_no_vocals(parsed: dict[str, Any]) -> bool:

@@ -345,6 +345,124 @@ def test_api_reconciles_worker_terminal_result_into_history(tmp_path):
     assert pending == []
 
 
+def test_reconciler_does_not_misfail_a_recent_running_job(tmp_path):
+    """A healthy running job must not be settled as failed just because the
+    reconciler was configured with a stale cutoff."""
+
+    async def exercise():
+        store = _store()
+        source = tmp_path / "song.wav"
+        source.write_bytes(b"audio")
+        database_path = tmp_path / "history.sqlite3"
+        owner = AccountStore(database_path).register(
+            "recent-runner",
+            "safe test password",
+        )
+        payload = _payload("job-recent", owner.id).model_copy(
+            update={
+                "asset": _payload("job-recent", owner.id).asset.model_copy(
+                    update={
+                        "path": source,
+                        "size_bytes": source.stat().st_size,
+                    }
+                )
+            }
+        )
+        created = await store.create_distributed(payload)
+        history = HistoryStore(database_path)
+        history.create(
+            job_id=created.id,
+            title="song",
+            file_name="song.wav",
+            language="en",
+            state=created.state.value,
+            created_at=created.created_at,
+            updated_at=created.updated_at,
+            audio_path=source,
+            model_source="network",
+            model_location="http://192.168.1.97:8004",
+            user_id=payload.owner_user_id,
+        )
+        # Worker is running and recently touched the job.
+        await store.mark_running(created.id, payload.owner_user_id)
+        snapshot = await store.get(created.id, owner_user_id=payload.owner_user_id)
+        count = await reconcile_terminal_history_once(
+            store,
+            history,
+            stale_after_seconds=3600,
+        )
+        pending = await store.pending_terminal_job_ids()
+        await store.shutdown()
+        return snapshot, count, pending
+
+    snapshot, count, pending = asyncio.run(exercise())
+
+    assert snapshot is not None and snapshot.state == JobState.RUNNING
+    # The job is fresh (updated moments ago), so the reconciler must not fail it.
+    assert count == 0
+    # Not terminal, so it stays out of the terminal reconcile set.
+    assert pending == []
+
+
+def test_reconciler_settles_a_genuinely_stale_running_job(tmp_path):
+    async def exercise():
+        store = _store()
+        source = tmp_path / "song.wav"
+        source.write_bytes(b"audio")
+        database_path = tmp_path / "history.sqlite3"
+        owner = AccountStore(database_path).register(
+            "stale-runner",
+            "safe test password",
+        )
+        payload = _payload("job-stale", owner.id).model_copy(
+            update={
+                "asset": _payload("job-stale", owner.id).asset.model_copy(
+                    update={
+                        "path": source,
+                        "size_bytes": source.stat().st_size,
+                    }
+                )
+            }
+        )
+        created = await store.create_distributed(payload)
+        history = HistoryStore(database_path)
+        history.create(
+            job_id=created.id,
+            title="song",
+            file_name="song.wav",
+            language="en",
+            state=created.state.value,
+            created_at=created.created_at,
+            updated_at=created.updated_at,
+            audio_path=source,
+            model_source="network",
+            model_location="http://192.168.1.97:8004",
+            user_id=payload.owner_user_id,
+        )
+        await store.mark_running(created.id, payload.owner_user_id)
+        # Backdate the worker's last update far enough to look abandoned.
+        from datetime import UTC, datetime, timedelta
+
+        await store.client.hset(
+            store._job_key(created.id),
+            mapping={"updated_at": (datetime.now(UTC) - timedelta(hours=3)).isoformat()},
+        )
+        count = await reconcile_terminal_history_once(
+            store,
+            history,
+            stale_after_seconds=3600,
+        )
+        snapshot = await store.get(created.id, owner_user_id=payload.owner_user_id)
+        await store.shutdown()
+        return count, snapshot
+
+    count, snapshot = asyncio.run(exercise())
+
+    assert count == 1
+    assert snapshot is not None and snapshot.state == JobState.FAILED
+    assert "超时" in snapshot.error
+
+
 def test_history_deletion_removes_source_from_dedicated_shared_audio_root(
     tmp_path,
 ):

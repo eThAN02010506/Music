@@ -367,13 +367,23 @@ export class PlayerStore {
       if (!media) return;
       this.enforcePlaybackBoundary(media);
       this.syncFollowers(media);
-      this.patch({
-        currentTime: clampTime(
-          media.currentTime,
-          this.effectiveDuration(media),
-        ),
-        playing: !media.paused,
-      });
+      // Throttle snapshot patches to ~4Hz during plain playback so lyric
+      // highlight and reader components do not re-render at frame rate. Stem
+      // drift correction above still runs every frame via syncFollowers.
+      const currentTime = clampTime(
+        media.currentTime,
+        this.effectiveDuration(media),
+      );
+      if (
+        this.snapshot.activePlayback
+        || Math.abs(currentTime - this.snapshot.currentTime) >= 0.25
+        || media.paused !== this.snapshot.playing
+      ) {
+        this.patch({
+          currentTime,
+          playing: !media.paused,
+        });
+      }
       if (!media.paused) {
         this.startScheduler();
       }

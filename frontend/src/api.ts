@@ -203,10 +203,11 @@ export const api = {
       undefined,
       { signal },
     ),
-  generateHistoryStems: (id: string) =>
+  generateHistoryStems: (id: string, signal?: AbortSignal) =>
     request<StemStatus>(
       `/history/${encodeURIComponent(id)}/stems`,
       { method: "POST" },
+      { signal },
     ),
   listenerProfile: (signal?: AbortSignal) =>
     request<ListenerProfile>("/listener-profile", undefined, { signal }),

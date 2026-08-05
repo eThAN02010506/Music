@@ -5,6 +5,7 @@ from unittest.mock import patch
 import wave
 
 import av
+import httpx
 import numpy as np
 import pytest
 from fastapi import HTTPException
@@ -1005,6 +1006,50 @@ def test_unified_adapter_resets_consecutive_error_count_on_success(tmp_path):
 
     # Two failures, then a success resets the counter, so the batch continues
     # to the end instead of aborting.
+    assert adapter.analysis_calls == 3
+    assert not any(
+        item.id == "omni.batch.error" for item in result.scene.evidence
+    )
+
+
+def test_unified_adapter_does_not_abort_batch_on_repeated_429(tmp_path):
+    """Rate limiting (429) is transient and must not be treated as a dead
+    endpoint: three consecutive 429s keep the batch running."""
+
+    class FakeRateLimitedOmni(QwenOmniUnifiedAdapter):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.analysis_calls = 0
+
+        async def _model(self):
+            return "test-model"
+
+        async def _analyze_chunk(self, **kwargs):
+            self.analysis_calls += 1
+            raise httpx.HTTPStatusError(
+                "429 Too Many Requests",
+                request=httpx.Request("POST", "http://x"),
+                response=httpx.Response(429),
+            )
+
+        def should_abort_chunking(self, error):
+            return False
+
+        async def _synthesize_report(self, **kwargs):
+            return "narrative", [], [], []
+
+    audio = tmp_path / "rate-limited.wav"
+    _write_test_audio(audio, seconds=12.0, sample_rate=16_000)
+    adapter = FakeRateLimitedOmni(
+        endpoint="http://127.0.0.1:9999",
+        model="test-model",
+        chunk_seconds=5,
+        chunk_overlap_seconds=0,
+    )
+
+    result = asyncio.run(adapter.analyze(_asset(audio), DspResult()))
+
+    # All 3 chunks attempted; 429 does not abort the batch.
     assert adapter.analysis_calls == 3
     assert not any(
         item.id == "omni.batch.error" for item in result.scene.evidence

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from pydantic import ValidationError
+from redis.exceptions import RedisError
 from starlette.concurrency import run_in_threadpool
 
 from music_insight.api.history import (
@@ -27,7 +28,7 @@ async def reconcile_terminal_history_once(
     history: HistoryStore,
     *,
     limit: int = 50,
-    stale_before: datetime | None = None,
+    stale_after_seconds: float | None = None,
 ) -> int:
     """Materialize worker terminal results through the API's SQLite writer.
 
@@ -50,7 +51,6 @@ async def reconcile_terminal_history_once(
                 jobs,
                 history,
                 job_id,
-                stale_before=stale_before,
             )
         except DistributedJobUnavailable:
             await _publish_status(
@@ -68,10 +68,27 @@ async def reconcile_terminal_history_once(
             # cancellation response and this reconciliation pass.
             await jobs.acknowledge_terminal(job_id)
             continue
+        except (DistributedJobUnavailable, RedisError):
+            # A redis outage surfaced from inside _reconcile_one (e.g. the
+            # finish/acknowledge write path). Do not swallow it into the generic
+            # at-least-once retry bucket: report and stop this pass so the
+            # backing loop backs off instead of hot-looping.
+            await _publish_status(
+                jobs,
+                error=f"job {job_id} write unavailable",
+            )
+            return reconciled
         except Exception:
             # Keep the sorted-set entry for an at-least-once retry.
             continue
         reconciled += progressed
+    if stale_after_seconds is not None:
+        settled = await _settle_stale_active_jobs(
+            jobs,
+            history,
+            stale_after_seconds=stale_after_seconds,
+        )
+        reconciled += settled
     if corrupt:
         await _publish_status(jobs, error=f"{corrupt} corrupt record(s) skipped")
     else:
@@ -79,12 +96,70 @@ async def reconcile_terminal_history_once(
     return reconciled
 
 
+async def _settle_stale_active_jobs(
+    jobs: RedisAnalysisJobStore,
+    history: HistoryStore,
+    *,
+    stale_after_seconds: float,
+) -> int:
+    """Fail running jobs whose worker has been silent past the lease window.
+
+    The terminal sorted set only receives jobs that already reached a terminal
+    state, so a worker that died mid-run would leave its job "running" forever
+    and never be seen by the normal reconcile pass. Scanning the active set
+    catches those orphans.
+    """
+
+    settled = 0
+    try:
+        active_ids = await jobs.active_job_ids()
+    except (DistributedJobUnavailable, RedisError):
+        await _publish_status(jobs, error="active list unavailable")
+        return 0
+    cutoff = datetime.now(UTC) - timedelta(seconds=stale_after_seconds)
+    for job_id in active_ids:
+        try:
+            payload = await jobs.payload(job_id)
+            if payload is None:
+                continue
+            snapshot = await jobs.get(
+                job_id,
+                owner_user_id=payload.owner_user_id,
+            )
+            if snapshot is None or snapshot.state in {
+                JobState.COMPLETED,
+                JobState.FAILED,
+                JobState.CANCELLED,
+            }:
+                continue
+            if snapshot.updated_at > cutoff:
+                # Worker is still reporting progress; leave it alone.
+                continue
+            await jobs.finish(
+                job_id,
+                payload.owner_user_id,
+                JobState.FAILED,
+                error="分析超时或 Worker 失联，任务已自动结算。",
+            )
+            await jobs.acknowledge_terminal(job_id)
+            settled += 1
+        except (DistributedJobUnavailable, RedisError):
+            await _publish_status(
+                jobs,
+                error=f"job {job_id} stale check unavailable",
+            )
+            return settled
+        except ValidationError:
+            continue
+        except Exception:
+            continue
+    return settled
+
+
 async def _reconcile_one(
     jobs: RedisAnalysisJobStore,
     history: HistoryStore,
     job_id: str,
-    *,
-    stale_before: datetime | None,
 ) -> int:
     payload = await jobs.payload(job_id)
     if payload is None:
@@ -102,21 +177,8 @@ async def _reconcile_one(
         JobState.FAILED,
         JobState.CANCELLED,
     }:
-        # A stale notification cannot publish a non-terminal row.  If the job
-        # has outlived its lease window it is settled as failed rather than
-        # leaving the SQLite row queued forever.
-        if (
-            stale_before is not None
-            and snapshot.updated_at <= stale_before
-        ):
-            await jobs.finish(
-                job_id,
-                payload.owner_user_id,
-                JobState.FAILED,
-                error="分析超时或 Worker 失联，任务已自动结算。",
-            )
-            await jobs.acknowledge_terminal(job_id)
-            return 0
+        # The terminal sorted set should only contain terminal jobs; a
+        # non-terminal entry is a stale notification and cannot be published.
         await jobs.acknowledge_terminal(job_id)
         return 0
     result = (
@@ -159,7 +221,7 @@ async def reconcile_terminal_history(
     history: HistoryStore,
     *,
     interval_seconds: float = 0.5,
-    stale_before: datetime | None = None,
+    stale_after_seconds: float | None = None,
 ) -> None:
     delay = _INITIAL_BACKOFF_SECONDS
     while True:
@@ -167,7 +229,7 @@ async def reconcile_terminal_history(
             await reconcile_terminal_history_once(
                 jobs,
                 history,
-                stale_before=stale_before,
+                stale_after_seconds=stale_after_seconds,
             )
             delay = _INITIAL_BACKOFF_SECONDS
         except Exception:

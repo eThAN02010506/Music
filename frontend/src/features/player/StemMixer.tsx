@@ -33,6 +33,7 @@ export function StemMixer({
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const activeRef = useRef(true);
+  const historyIdRef = useRef(historyId);
   const loadRef = useRef<() => void>(() => {});
 
   const clearPoll = useCallback(() => {
@@ -75,6 +76,7 @@ export function StemMixer({
     const controller = new AbortController();
     controllerRef.current = controller;
     activeRef.current = true;
+    historyIdRef.current = historyId;
     setStatus(null);
     setLoaded(new Set());
     setFailed(new Set());
@@ -107,9 +109,16 @@ export function StemMixer({
     clearPoll();
     setGenerating(true);
     setError("");
+    const controller = controllerRef.current;
+    const requestedId = historyId;
     try {
-      const next = await api.generateHistoryStems(historyId);
-      if (!activeRef.current) return;
+      const next = await api.generateHistoryStems(
+        requestedId,
+        controller?.signal,
+      );
+      // A stale POST for a previous historyId must not overwrite the current
+      // component's status after a history switch.
+      if (!activeRef.current || requestedId !== historyIdRef.current) return;
       setStatus(next);
       setLoaded(new Set());
       setFailed(new Set());
@@ -117,11 +126,18 @@ export function StemMixer({
         schedulePoll();
       }
     } catch (cause) {
-      if (activeRef.current) {
+      if (
+        activeRef.current
+        && requestedId === historyIdRef.current
+        && !isAbortError(cause)
+      ) {
         setError(cause instanceof Error ? cause.message : "分轨生成失败");
       }
     } finally {
-      if (activeRef.current) {
+      if (
+        activeRef.current
+        && requestedId === historyIdRef.current
+      ) {
         setGenerating(false);
       }
     }

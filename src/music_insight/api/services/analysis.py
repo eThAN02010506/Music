@@ -365,14 +365,18 @@ async def _submit_distributed_analysis_job(
             detail="Distributed task queue is not configured.",
         )
     job_id = uuid4().hex
+    resolved_path = asset.path.resolve()
+    # Hashing a large normalized WAV blocks the event loop; run it in the
+    # threadpool so an upload submission cannot stall unrelated requests.
+    content_key = await run_in_threadpool(content_cache_key, resolved_path)
     payload = DistributedAnalysisPayload(
         job_id=job_id,
         owner_user_id=user_id,
-        asset=asset.model_copy(update={"path": asset.path.resolve()}),
+        asset=asset.model_copy(update={"path": resolved_path}),
         model_source=model_source,
         model_endpoint=model_endpoint,
         local_model_path=local_model_path,
-        content_key=content_cache_key(asset.path.resolve()),
+        content_key=content_key,
     )
     snapshot: JobSnapshot | None = None
     history_created = False

@@ -122,10 +122,7 @@ async def _lifespan(api: FastAPI):
             reconcile_terminal_history(
                 api.state.jobs,
                 history_store,
-                stale_before=datetime.now(UTC)
-                - timedelta(
-                    seconds=settings.celery_soft_time_limit_seconds
-                ),
+                stale_after_seconds=settings.celery_soft_time_limit_seconds,
             )
         )
 
@@ -261,7 +258,10 @@ def create_app(
                             status_code=403,
                         )
         response = await call_next(request)
-        if request.url.path in {"/", "/docs"}:
+        # CSP is scoped to the Debug Console page (which uses an inline
+        # script). The /docs Swagger UI loads its bundle from the FastAPI CDN,
+        # so a self-only script-src would break it.
+        if request.url.path == "/":
             response.headers.setdefault(
                 "Content-Security-Policy",
                 "default-src 'self'; "
