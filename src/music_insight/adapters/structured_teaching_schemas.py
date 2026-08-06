@@ -91,7 +91,12 @@ def _text_or_object_array(
             "text": _bounded_string(item_max_length),
         },
         "required": [],
-        "additionalProperties": False,
+        # Do not forbid extra object members: a multimodal model frequently adds
+        # fields such as ``confidence`` to a reading/question object, and the
+        # parser only extracts the text fields, so extra keys are harmless.
+        # Enforcing additionalProperties=False here rejected good answers and
+        # forced the conservative fallback.
+        "additionalProperties": True,
     }
     return {
         "type": "array",
