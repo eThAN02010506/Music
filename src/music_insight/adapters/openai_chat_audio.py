@@ -57,24 +57,26 @@ class OpenAIChatAudioAdapter(StructuredOmniAdapter):
         )
         if uses_json_schema and self._json_schema_supported is False:
             outbound_request = self._json_object_request(request)
-        async with self._client_scope() as client:
+        client = self._http_client
+        if client is None:
+            raise RuntimeError("HTTP client is not active; call inside _request_scope")
+        response = await self._post_with_retry(
+            client,
+            outbound_request,
+            timeout=timeout,
+        )
+        if (
+            response.status_code in {400, 422}
+            and uses_json_schema
+            and outbound_request is request
+            and self._schema_format_unsupported(response)
+        ):
+            self._json_schema_supported = False
             response = await self._post_with_retry(
                 client,
-                outbound_request,
+                self._json_object_request(request),
                 timeout=timeout,
             )
-            if (
-                response.status_code in {400, 422}
-                and uses_json_schema
-                and outbound_request is request
-                and self._schema_format_unsupported(response)
-            ):
-                self._json_schema_supported = False
-                response = await self._post_with_retry(
-                    client,
-                    self._json_object_request(request),
-                    timeout=timeout,
-                )
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -92,6 +94,11 @@ class OpenAIChatAudioAdapter(StructuredOmniAdapter):
 
     @asynccontextmanager
     async def _client_scope(self) -> AsyncIterator[httpx.AsyncClient]:
+        """One process-wide client per request scope (whole workflow), never
+        per chat call, so concurrent chat calls share the same live client and
+        keep-alive pool instead of racing to close it.
+        """
+
         if self._http_client is not None:
             yield self._http_client
             return

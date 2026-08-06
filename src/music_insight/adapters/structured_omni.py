@@ -16,19 +16,11 @@ from music_insight.adapters.structured_omni_audio import (
 )
 from music_insight.adapters.structured_omni_parsing import (
     atmosphere_items,
-    confidence,
     deduplicate,
     deduplicate_evidence,
     deduplicate_lyrics,
-    evidence_items,
     filter_lyrics_quality,
-    is_boundary_artifact,
-    lyric_units,
     meaningful,
-    meaningful_text,
-    near_duplicate,
-    normalize_label,
-    offset_span,
     parse_chunk,
     strings,
 )
@@ -77,7 +69,6 @@ from music_insight.schemas import (
     EvidenceType,
     LiteraryResult,
     LyricsSegment,
-    TimeSpan,
     UnifiedAudioResult,
     VerifiedLyricsSynthesisResult,
 )
@@ -588,23 +579,6 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
             label_aliases=self.label_aliases,
         )
 
-    def _evidence_items(
-        self,
-        value: Any,
-        prefix: str,
-        chunk_start: float,
-        duration: float,
-    ) -> list[Evidence]:
-        return evidence_items(
-            value,
-            prefix,
-            chunk_start,
-            duration,
-            source=self.source,
-            chunk_seconds=self.chunk_seconds,
-            placeholder_values=self.placeholder_values,
-        )
-
     def _atmosphere_items(self, value: Any, model: str) -> list[Evidence]:
         return atmosphere_items(
             value,
@@ -613,35 +587,6 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
             placeholder_values=self.placeholder_values,
             atmosphere_aliases=self.atmosphere_aliases,
         )
-
-    def _is_boundary_artifact(
-        self,
-        prefix: str,
-        text: str,
-        span: TimeSpan | None,
-        chunk_start: float,
-        duration: float,
-    ) -> bool:
-        return is_boundary_artifact(
-            prefix,
-            text,
-            span,
-            chunk_start,
-            duration,
-            self.chunk_seconds,
-        )
-
-    @staticmethod
-    def _offset_span(
-        item: dict[str, Any],
-        chunk_start: float,
-        duration: float,
-    ) -> TimeSpan | None:
-        return offset_span(item, chunk_start, duration)
-
-    @staticmethod
-    def _confidence(value: Any) -> float | None:
-        return confidence(value)
 
     @classmethod
     def _strings(cls, value: Any, limit: int) -> list[str]:
@@ -653,16 +598,8 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
         )
 
     @classmethod
-    def _normalize_label(cls, value: str) -> str:
-        return normalize_label(value, cls.label_aliases)
-
-    @classmethod
     def _meaningful(cls, value: str) -> bool:
         return meaningful(value, cls.placeholder_values)
-
-    @classmethod
-    def _meaningful_text(cls, value: Any) -> str:
-        return meaningful_text(value, cls.placeholder_values)
 
     @staticmethod
     def _deduplicate(values: list[str], limit: int) -> list[str]:
@@ -681,18 +618,6 @@ class StructuredOmniAdapter(UnifiedAudioAdapter):
         values: list[LyricsSegment],
     ) -> tuple[list[LyricsSegment], list[str]]:
         return filter_lyrics_quality(values)
-
-    @staticmethod
-    def _lyric_units(text: str) -> int:
-        return lyric_units(text)
-
-    @classmethod
-    def _near_duplicate(
-        cls,
-        first: LyricsSegment,
-        second: LyricsSegment,
-    ) -> bool:
-        return near_duplicate(first, second)
 
     @staticmethod
     def _deduplicate_evidence(

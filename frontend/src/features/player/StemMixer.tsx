@@ -77,6 +77,7 @@ export function StemMixer({
     controllerRef.current = controller;
     activeRef.current = true;
     historyIdRef.current = historyId;
+    setGenerating(false);
     setStatus(null);
     setLoaded(new Set());
     setFailed(new Set());

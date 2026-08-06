@@ -68,7 +68,7 @@ async def reconcile_terminal_history_once(
             # cancellation response and this reconciliation pass.
             await jobs.acknowledge_terminal(job_id)
             continue
-        except (DistributedJobUnavailable, RedisError):
+        except RedisError:
             # A redis outage surfaced from inside _reconcile_one (e.g. the
             # finish/acknowledge write path). Do not swallow it into the generic
             # at-least-once retry bucket: report and stop this pass so the

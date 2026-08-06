@@ -22,7 +22,6 @@ from music_insight.api.contracts.history import HistoryDetail
 from music_insight.api.history import HistoryStore
 from music_insight.api.services.history import require_history
 from music_insight.api.services.teaching_chat import (
-    _remove_repeated_suggestions as _remove_repeated_suggestions_impl,
     answer_chat_context as _answer_chat_context,
     should_relisten as _should_relisten,
 )
@@ -54,7 +53,6 @@ from music_insight.teaching.models import (
     MusicUnderstandingMap,
     RelistenRequest,
     TeachingChatContext,
-    TeachingChatResponse,
     TeachingTimeSpan,
 )
 from music_insight.teaching.protocols import (
@@ -74,16 +72,6 @@ from music_insight.schemas import AnalysisResult
 
 
 TEACHING_PENDING_LEASE = timedelta(minutes=30)
-
-
-def _remove_repeated_suggestions(
-    response: TeachingChatResponse,
-    *,
-    context: TeachingChatContext,
-) -> TeachingChatResponse:
-    """Compatibility wrapper for callers of the former service-local helper."""
-
-    return _remove_repeated_suggestions_impl(response, context=context)
 
 
 async def _settle_despite_cancellation(task: asyncio.Task):

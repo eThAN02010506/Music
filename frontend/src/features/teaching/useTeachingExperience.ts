@@ -188,22 +188,24 @@ export function useTeachingExperience(historyId: string | null) {
   }, [profile.learned_concepts, profile.preferences]);
 
   const toggleConcept = useCallback(async (concept: string) => {
-    const learned = profile.learned_concepts.includes(concept)
-      ? profile.learned_concepts.filter((item) => item !== concept)
-      : [...profile.learned_concepts, concept];
-    try {
-      const next = await api.updateListenerProfile(
-        profile.level,
-        profile.preferences,
-        learned,
-      );
-      setProfile(next);
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "无法保存听觉训练进度",
-      );
-    }
-  }, [profile]);
+    // Read the latest concepts from state so rapid toggles do not overwrite
+    // each other via a stale closure.
+    setProfile((current) => {
+      const learned = current.learned_concepts.includes(concept)
+        ? current.learned_concepts.filter((item) => item !== concept)
+        : [...current.learned_concepts, concept];
+      void api.updateListenerProfile(current.level, current.preferences, learned)
+        .then((next) => setProfile(next))
+        .catch((cause) => {
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : "无法保存听觉训练进度",
+          );
+        });
+      return { ...current, learned_concepts: learned };
+    });
+  }, []);
 
   return {
     guide,

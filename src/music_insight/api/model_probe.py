@@ -5,7 +5,10 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import BaseModel
 
-from music_insight.adapters.model_capabilities import probe_model_service
+from music_insight.adapters.model_capabilities import (
+    clear_probe_cache,
+    probe_model_service,
+)
 
 
 class ModelProbeRequest(BaseModel):
@@ -46,6 +49,9 @@ async def probe_model_endpoint(
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> ModelProbeResult:
     endpoint = validate_model_endpoint(endpoint)
+    # The "test connection" action must always reflect the live service, not a
+    # cached teaching-runtime probe.
+    clear_probe_cache(endpoint)
     result = await probe_model_service(
         endpoint,
         transport=transport,

@@ -97,11 +97,11 @@ def _repair_json_object(candidate: str, original_error: Exception) -> dict[str, 
         pass
 
     # A multimodal model sometimes omits the comma between two values or a
-    # value and the next key. Insert a comma only where two complete values
-    # (object/array/string/number/literal) are directly adjacent, so valid
-    # JSON is never altered.
+    # value and the next key. Insert a comma only where a complete value ends
+    # and another value/key starts, so valid JSON is never altered and string
+    # literals containing digit-dash patterns (e.g. "版本0-1") are not touched.
     comma_inserted = re.sub(
-        r'(["\}\]0-9])\s*(?=["\{\[0-9-])',
+        r'(["\}\]0-9])\s*(?=["\{\[])',
         r'\1, ',
         quoted_keys,
     )

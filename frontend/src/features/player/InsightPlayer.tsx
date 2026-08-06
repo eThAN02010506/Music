@@ -14,12 +14,14 @@ import { WaveformView } from "./WaveformView";
 import { loadWaveformOnce } from "./waveformRequest";
 import { StemMixer } from "./StemMixer";
 
+const EMPTY_SECTIONS: SectionMarker[] = [];
+
 export function InsightPlayer({
   audioUrl,
   title,
   historyId,
   vocalPresence,
-  sections = [],
+  sections = EMPTY_SECTIONS,
 }: {
   audioUrl: string;
   title: string;

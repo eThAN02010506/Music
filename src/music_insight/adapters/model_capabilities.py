@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import time
 from typing import Any
 
 import httpx
@@ -10,6 +11,27 @@ import httpx
 ModelProtocol = str
 OPENAI_CHAT_PROTOCOL = "openai-chat"
 COMNI_CHAT_PROTOCOL = "comni-ws-chat"
+
+# Capability probes are read-only HTTP GETs that each teaching round trip would
+# otherwise repeat (build_orchestrator constructs a fresh adapter per request).
+# Cache the result per endpoint for a short TTL to avoid the extra 5-request
+# round trip on every chat turn, while still refreshing after a few minutes.
+_PROBE_CACHE_TTL_SECONDS = 300.0
+_probe_cache: dict[str, tuple[float, "ModelServiceCapabilities"]] = {}
+
+
+def clear_probe_cache(endpoint: str | None = None) -> None:
+    """Drop cached capability probes.
+
+    With an endpoint, only that endpoint's cache entry is removed (used by the
+    model-settings probe button so it reflects the live service). Without one,
+    the whole cache is cleared (used by tests).
+    """
+
+    if endpoint is None:
+        _probe_cache.clear()
+        return
+    _probe_cache.pop(endpoint.rstrip("/"), None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,9 +60,35 @@ async def probe_model_service(
     transport: httpx.AsyncBaseTransport | None = None,
     timeout: float = 8.0,
 ) -> ModelServiceCapabilities:
-    """Discover the usable analysis protocol without invoking inference."""
+    """Discover the usable analysis protocol without invoking inference.
+
+    Results are cached per endpoint for ``_PROBE_CACHE_TTL_SECONDS`` because a
+    teaching adapter is rebuilt per request and would otherwise probe the model
+    service on every chat turn. Callers that need a fresh result (e.g. the
+    model-settings probe button) should call :func:`clear_probe_cache` first.
+    """
 
     endpoint = endpoint.rstrip("/")
+    cached = _probe_cache.get(endpoint)
+    if cached is not None:
+        recorded_at, capabilities = cached
+        if time.monotonic() - recorded_at < _PROBE_CACHE_TTL_SECONDS:
+            return capabilities
+    result = await _probe_model_service(
+        endpoint,
+        transport=transport,
+        timeout=timeout,
+    )
+    _probe_cache[endpoint] = (time.monotonic(), result)
+    return result
+
+
+async def _probe_model_service(
+    endpoint: str,
+    *,
+    transport: httpx.AsyncBaseTransport | None,
+    timeout: float,
+) -> ModelServiceCapabilities:
     async with httpx.AsyncClient(
         timeout=timeout,
         trust_env=False,

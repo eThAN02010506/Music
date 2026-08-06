@@ -17,12 +17,12 @@ from music_insight.api.dependencies import get_history_store
 from music_insight.api.routers import teaching as teaching_router
 from music_insight.api.services.teaching import (
     TEACHING_SCHEMA_VERSION,
-    _remove_repeated_suggestions,
     answer_music_question,
     create_conversation,
     generate_teaching_guide,
     get_teaching_guide,
 )
+from music_insight.api.services.teaching_chat import _remove_repeated_suggestions
 from music_insight.api.teaching import TeachingStore
 from music_insight.config import get_settings
 from music_insight.schemas import (

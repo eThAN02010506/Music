@@ -7,6 +7,10 @@ from music_insight.api.model_probe import (
     probe_model_endpoint,
     validate_model_endpoint,
 )
+from music_insight.adapters.model_capabilities import (
+    clear_probe_cache,
+    probe_model_service,
+)
 
 
 def test_probe_reports_online_model_without_audio_modality():
@@ -187,3 +191,38 @@ def test_probe_rejects_non_http_endpoint():
 def test_model_endpoint_rejects_ambiguous_or_credentialed_urls(endpoint):
     with pytest.raises(ValueError):
         validate_model_endpoint(endpoint)
+
+
+def test_probe_cache_serves_repeat_calls_without_reprobing():
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if request.url.path == "/v1/models":
+            return httpx.Response(
+                200, json={"data": [{"id": "qwen"}]}
+            )
+        if request.url.path == "/props":
+            return httpx.Response(200, json={"modalities": {"audio": True}})
+        return httpx.Response(200, json={})
+
+    async def exercise():
+        clear_probe_cache("http://cache-probe.test:8004")
+        transport = httpx.MockTransport(handler)
+        first = await probe_model_service(
+            "http://cache-probe.test:8004/",
+            transport=transport,
+        )
+        second = await probe_model_service(
+            "http://cache-probe.test:8004/",
+            transport=transport,
+        )
+        return first, second
+
+    first, second = asyncio.run(exercise())
+
+    assert first.protocol == second.protocol
+    # The first call probed all five endpoints; the second hit the cache and
+    # added no further network round trips.
+    assert calls["count"] == 5
+    clear_probe_cache()
