@@ -67,6 +67,45 @@ def _string_array(
     }
 
 
+def _text_or_object_array(
+    *,
+    max_items: int,
+    item_max_length: int,
+    min_items: int = 0,
+) -> dict[str, Any]:
+    """Array whose items may be a plain string or a small object.
+
+    A 30B-class multimodal model frequently emits "possible readings" and
+    follow-up questions as objects (``{"label": ..., "description": ...}``)
+    instead of bare strings. Requiring only strings made the wire contract fail
+    on otherwise-good answers and forced the conservative fallback. The parser
+    normalizes an object item to its text field, so accepting both shapes here
+    keeps the answer while staying bounded.
+    """
+
+    object_item = {
+        "type": "object",
+        "properties": {
+            "label": _bounded_string(item_max_length),
+            "description": _bounded_string(item_max_length),
+            "text": _bounded_string(item_max_length),
+        },
+        "required": [],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "array",
+        "items": {
+            "anyOf": [
+                _bounded_string(item_max_length),
+                object_item,
+            ]
+        },
+        "minItems": min_items,
+        "maxItems": max_items,
+    }
+
+
 def _span_properties() -> dict[str, Any]:
     return {
         "start_s": {"type": "number", "minimum": 0},
@@ -193,13 +232,19 @@ def teaching_chat_response_format() -> dict[str, Any]:
             "source_ids": {
                 "type": "array",
                 "items": _SOURCE_ID,
-                "maxItems": 6,
+                # Deliberately wider than the 6 IDs the parser keeps. The wire
+                # schema is a shape contract, not a truncation boundary; a
+                # 30B-class model routinely cites 8-10 nearby facts, and
+                # rejecting that output (instead of letting the parser keep the
+                # first six) caused frequent conservative fallbacks. The parser
+                # applies the [:6] cap deterministically.
+                "maxItems": 12,
             },
-            "suggested_questions": _string_array(
+            "suggested_questions": _text_or_object_array(
                 max_items=4,
                 item_max_length=300,
             ),
-            "alternative_readings": _string_array(
+            "alternative_readings": _text_or_object_array(
                 max_items=4,
                 item_max_length=300,
             ),

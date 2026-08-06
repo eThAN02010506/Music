@@ -199,7 +199,7 @@ def parse_teaching_chat_response(
             focus=focus,
             time_range_id=first_range.id,
         ),
-        suggested_questions=payload.get("suggested_questions") or [],
+        suggested_questions=_string_list(payload.get("suggested_questions")),
         player_actions=[
             PlayerAction(
                 type=PlayerActionType.LOOP_RANGE,
@@ -211,7 +211,7 @@ def parse_teaching_chat_response(
                 ),
             )
         ],
-        alternative_readings=payload.get("alternative_readings") or [],
+        alternative_readings=_string_list(payload.get("alternative_readings")),
         warnings=[],
         confidence=confidence,
         relistened=any(
@@ -345,4 +345,34 @@ def _unique_strings(value: Any) -> list[str]:
     for item in value:
         if isinstance(item, str) and item not in result:
             result.append(item)
+    return result
+
+
+def _string_list(value: Any) -> list[str]:
+    """Normalize string-or-object items into plain strings.
+
+    The wire schema accepts both a bare string and a small object (label /
+    description / text) for suggested questions and alternative readings,
+    because the model frequently emits objects there. Normalize those objects
+    to their text content so the domain model still sees a string list.
+    """
+
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            text = item
+        elif isinstance(item, dict):
+            text = (
+                item.get("description")
+                or item.get("text")
+                or item.get("label")
+                or ""
+            )
+        else:
+            continue
+        cleaned = str(text).strip()
+        if cleaned and cleaned not in result:
+            result.append(cleaned)
     return result
