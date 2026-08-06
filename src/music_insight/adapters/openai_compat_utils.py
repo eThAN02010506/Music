@@ -95,8 +95,24 @@ def _repair_json_object(candidate: str, original_error: Exception) -> dict[str, 
             return parsed
     except json.JSONDecodeError:
         pass
+
+    # A multimodal model sometimes omits the comma between two values or a
+    # value and the next key. Insert a comma only where two complete values
+    # (object/array/string/number/literal) are directly adjacent, so valid
+    # JSON is never altered.
+    comma_inserted = re.sub(
+        r'(["\}\]0-9])\s*(?=["\{\[0-9-])',
+        r'\1, ',
+        quoted_keys,
+    )
     try:
-        parsed = ast.literal_eval(quoted_keys)
+        parsed = json.loads(comma_inserted)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    try:
+        parsed = ast.literal_eval(comma_inserted)
         if isinstance(parsed, dict):
             return parsed
     except (SyntaxError, ValueError):

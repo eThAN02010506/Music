@@ -109,10 +109,38 @@ def test_validated_chat_retries_syntactic_json_with_wrong_schema() -> None:
     assert "music_chunk_analysis" in retry["messages"][0]["content"]
 
 
-def test_malformed_json_retry_uses_json_object_without_mutating_request() -> None:
+def test_missing_comma_in_object_is_repaired_without_retry() -> None:
+    """An object missing a comma between members is repaired locally. The
+    repaired JSON then still fails schema validation for missing required
+    fields, so the strict-schema retry runs with the full payload — but the
+    repair itself is what makes the first response parseable."""
+
     adapter = _SequenceAdapter(
         [
             '{"lyrics": [] "themes": []}',
+            _chunk_payload(),
+        ]
+    )
+    request = {
+        "messages": [{"role": "system", "content": "Return JSON."}],
+        "response_format": adapter._chunk_response_format(),
+        "max_tokens": 1800,
+    }
+    original = copy.deepcopy(request)
+
+    result = asyncio.run(adapter._chat_json(request, 1))
+
+    assert result == _chunk_payload()
+    assert request == original
+    # The repair turned the malformed JSON into a parseable object, so the
+    # retry stays on the strict schema (not a json_object fallback).
+    assert adapter.requests[1]["response_format"] == request["response_format"]
+
+
+def test_malformed_json_retry_uses_json_object_without_mutating_request() -> None:
+    adapter = _SequenceAdapter(
+        [
+            '{"lyrics": [} "themes": []}',  # unrepairable: stray closing bracket
             _chunk_payload(),
         ]
     )
