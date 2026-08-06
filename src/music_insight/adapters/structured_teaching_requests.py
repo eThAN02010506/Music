@@ -162,6 +162,8 @@ def teaching_chat_request(
         "明确区分 observed_fact/computed_fact、grounded_interpretation 和"
         " possible_reading。source_ids 只能逐字引用 sources 中的 source_id；"
         "程序会根据这些 ID 生成可点击时间、证据卡与复听动作，你不得自行生成时间。"
+        "analysis_summary 与 vocal_presence 只是背景信息，不是可引用的 source_id；"
+        "需要引用时必须选择 sources 中带时间的证据。"
         "有足够来源时 insufficient_evidence=false 且 source_ids 至少一项；"
         "确实没有可引用来源时设为 true、confidence 不得超过 0.4，并明确"
         "说明证据不足，不得补写声音事实。"
