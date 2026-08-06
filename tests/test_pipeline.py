@@ -993,6 +993,20 @@ def test_unified_adapter_resets_consecutive_error_count_on_success(tmp_path):
         async def _synthesize_report(self, **kwargs):
             return "narrative", [], [], []
 
+        async def _recover_missing(self, **kwargs):
+            # Avoid a real network call to the dead test endpoint; recovery
+            # finds nothing new, which is a normal degraded outcome.
+            return {
+                "lyrics": [],
+                "instruments": [],
+                "sound_events": [],
+                "emotion_timeline": [],
+                "themes": [],
+                "narrative": "",
+                "vocals_detected": None,
+                "vocal_confidence": None,
+            }
+
     audio = tmp_path / "recovering-fail.wav"
     _write_test_audio(audio, seconds=12.0, sample_rate=16_000)
     adapter = FakeRecoveringFailOmni(
@@ -1008,6 +1022,59 @@ def test_unified_adapter_resets_consecutive_error_count_on_success(tmp_path):
     # to the end instead of aborting.
     assert adapter.analysis_calls == 3
     assert not any(
+        item.id == "omni.batch.error" for item in result.scene.evidence
+    )
+
+
+def test_recovery_transport_errors_abort_batch_after_repeats(tmp_path):
+    """A recovery call that repeatedly hits a dead endpoint must stop the
+    batch instead of degrading every chunk silently."""
+
+    class FakeRecoveryTransportFailOmni(QwenOmniUnifiedAdapter):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.analysis_calls = 0
+
+        async def _model(self):
+            return "test-model"
+
+        async def _analyze_chunk(self, **kwargs):
+            self.analysis_calls += 1
+            return {
+                "lyrics": [],
+                "instruments": [],
+                "sound_events": [],
+                "emotion_timeline": [],
+                "themes": [],
+                "narrative": "",
+                "vocals_detected": None,
+                "vocal_confidence": None,
+            }
+
+        def should_abort_chunking(self, error):
+            return False
+
+        async def _recover_missing(self, **kwargs):
+            raise httpx.ConnectError("connection refused")
+
+        async def _synthesize_report(self, **kwargs):
+            return "narrative", [], [], []
+
+    audio = tmp_path / "recovery-fail.wav"
+    _write_test_audio(audio, seconds=12.0, sample_rate=16_000)
+    adapter = FakeRecoveryTransportFailOmni(
+        endpoint="http://127.0.0.1:9999",
+        model="test-model",
+        chunk_seconds=5,
+        chunk_overlap_seconds=0,
+    )
+
+    result = asyncio.run(adapter.analyze(_asset(audio), DspResult()))
+
+    # The recovery transport failure counts toward the abort state machine;
+    # the third consecutive failure stops the batch.
+    assert adapter.analysis_calls == 3
+    assert any(
         item.id == "omni.batch.error" for item in result.scene.evidence
     )
 
@@ -1087,6 +1154,36 @@ def test_fusion_collapses_repeated_chunk_errors_by_type(tmp_path):
     # 12 identical chunk errors collapse to one sample plus a chunk count.
     assert "12 个音频分块" in error_warnings[0]
     assert error_warnings[0].count("第 ") <= 1
+
+
+def test_fusion_error_warning_counts_more_than_five_error_types():
+    errors = [
+        Evidence(
+            id=f"omni.chunk.{index}.error",
+            source="test",
+            kind=EvidenceType.OBSERVED,
+            text=f"第 {index} 个音频分块分析失败：type-{index}",
+            confidence=0.0,
+            span=TimeSpan(start_s=0, end_s=10),
+            metadata={"error_type": f"ErrorType{index}"},
+        )
+        for index in range(1, 8)
+    ]
+    asr = AsrResult(model="test", lyrics=[], evidence=errors)
+    scene = AudioSceneResult(model="test", evidence=[])
+    literary = LiteraryResult(model="test", themes=[], narrative="n", evidence=[])
+    dsp = DspResult(evidence=[])
+
+    result = FusionEngine().merge(asr, scene, literary, dsp)
+
+    error_warnings = [
+        warning
+        for warning in result.warnings
+        if "部分模块调用失败" in warning
+    ]
+    assert len(error_warnings) == 1
+    # 7 distinct error types: 5 shown plus an explicit "另有 2 类" count.
+    assert "另有 2 类失败原因" in error_warnings[0]
 
 
 def test_unified_adapter_degrades_when_whole_analysis_hits_deadline(

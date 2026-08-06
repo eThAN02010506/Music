@@ -97,8 +97,10 @@ export function sanitizePlayerAction(
     };
   }
   if (action.type === "set_ab") {
-    const a = normalizeRange(action.a, duration);
-    const b = normalizeRange(action.b, duration);
+    // A/B comparison segments share the same 30-second cap as waveform
+    // selections so the product semantics stay consistent.
+    const a = limitSelectionRange(action.a, duration);
+    const b = limitSelectionRange(action.b, duration);
     return a && b ? { ...action, a, b } : null;
   }
   const range = normalizeRange(action, duration);

@@ -192,4 +192,7 @@ def _summarize_error_warning(values: list[Evidence]) -> str:
         )
         suffix = f"（涉及 {chunk_count} 个音频分块）" if chunk_count > 1 else ""
         parts.append(f"{sample}{suffix}")
-    return "部分模块调用失败，已返回其余可用结果：" + "；".join(parts[:5])
+    summary = "；".join(parts[:5])
+    if len(parts) > 5:
+        summary += f"；另有 {len(parts) - 5} 类失败原因"
+    return "部分模块调用失败，已返回其余可用结果：" + summary

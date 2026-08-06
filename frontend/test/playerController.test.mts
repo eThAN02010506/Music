@@ -83,6 +83,21 @@ test("model-provided player actions are clamped and invalid ranges rejected", ()
   );
 });
 
+test("A/B comparison segments are capped at thirty seconds", () => {
+  assert.deepEqual(
+    sanitizePlayerAction({
+      type: "set_ab",
+      a: { start_s: 10, end_s: 60 },
+      b: { start_s: 70, end_s: 140 },
+    }, 200),
+    {
+      type: "set_ab",
+      a: { start_s: 10, end_s: 40 },
+      b: { start_s: 70, end_s: 100 },
+    },
+  );
+});
+
 test("overlap checks use half-open time ranges", () => {
   assert.equal(
     spanOverlaps({ start_s: 0, end_s: 5 }, { start_s: 5, end_s: 8 }),

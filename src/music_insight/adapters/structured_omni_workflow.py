@@ -208,6 +208,7 @@ class StructuredOmniAnalysisWorkflow:
         deadline_at: float | None = None,
     ) -> bool:
         started_at = perf_counter()
+        recovery_degraded = False
         await self.adapter._notify(
             progress,
             "audio_analysis",
@@ -317,23 +318,51 @@ class StructuredOmniAnalysisWorkflow:
                     timeout=remaining,
                 )
         except Exception as exc:
-            if not self.adapter.should_abort_chunking(exc):
+            if self.adapter.should_abort_chunking(exc):
+                self._record_batch_abort(
+                    state,
+                    index=index,
+                    total_chunks=total_chunks,
+                    start_s=start_s,
+                    end_s=end_s,
+                    error=exc,
+                )
+                await self._notify_chunk_complete(
+                    index=index,
+                    total_chunks=total_chunks,
+                    started_at=started_at,
+                    progress=progress,
+                )
+                return False
+            if self._should_abort_consecutive_errors(state, exc):
+                # A recovery call that repeatedly hits a transport error is the
+                # same dead-endpoint shape as a failing chunk analysis; stop the
+                # batch instead of failing the whole task or wasting retries.
+                self._record_batch_abort(
+                    state,
+                    index=index,
+                    total_chunks=total_chunks,
+                    start_s=start_s,
+                    end_s=end_s,
+                    error=exc,
+                )
+                await self._notify_chunk_complete(
+                    index=index,
+                    total_chunks=total_chunks,
+                    started_at=started_at,
+                    progress=progress,
+                )
+                return False
+            if _is_transport_failure(exc):
+                # A single transport failure during recovery degrades this
+                # chunk's lyric result but must not fail the whole task; the
+                # recovery method has already recorded the .unavailable
+                # evidence. _should_abort_consecutive_errors above already
+                # counted the family, so a half-dead endpoint still aborts
+                # after enough degraded chunks.
+                recovery_degraded = True
+            else:
                 raise
-            self._record_batch_abort(
-                state,
-                index=index,
-                total_chunks=total_chunks,
-                start_s=start_s,
-                end_s=end_s,
-                error=exc,
-            )
-            await self._notify_chunk_complete(
-                index=index,
-                total_chunks=total_chunks,
-                started_at=started_at,
-                progress=progress,
-            )
-            return False
         parsed["lyrics"] = self._owned_overlap_lyrics(
             parsed["lyrics"],
             index=index,
@@ -355,8 +384,12 @@ class StructuredOmniAnalysisWorkflow:
             chunk_start=start_s,
             chunk_end=end_s,
         )
-        state.consecutive_error_family = None
-        state.consecutive_error_count = 0
+        # A fully healthy chunk (analysis + recovery) resets the
+        # consecutive-error counter; a degraded recovery keeps counting so a
+        # half-dead endpoint still aborts after enough consecutive failures.
+        if not recovery_degraded:
+            state.consecutive_error_family = None
+            state.consecutive_error_count = 0
 
         state.lyrics.extend(parsed["lyrics"])
         state.instruments.extend(parsed["instruments"])
@@ -537,6 +570,11 @@ class StructuredOmniAnalysisWorkflow:
         except Exception as exc:
             if self.adapter.should_abort_chunking(exc):
                 raise
+            if _is_transport_failure(exc):
+                # A half-dead endpoint surfaces here as a transport error; let
+                # the _process_chunk state machine count it and abort the batch
+                # after repeats instead of silently degrading every chunk.
+                raise
             parsed["lyrics"] = cleaned_lyrics
             state.evidence.append(
                 Evidence(
@@ -663,6 +701,10 @@ class StructuredOmniAnalysisWorkflow:
                 )
         except Exception as exc:
             if self.adapter.should_abort_chunking(exc):
+                raise
+            if _is_transport_failure(exc):
+                # Same as _recover_bad_lyrics: count transport failures toward
+                # the batch-abort state machine instead of degrading silently.
                 raise
             state.evidence.append(
                 Evidence(
@@ -1012,6 +1054,19 @@ def _transient_http_error(family: str) -> bool:
     if family.startswith("http:") and not family.startswith("http:5"):
         return True
     return False
+
+
+def _is_transport_failure(error: Exception) -> bool:
+    """Return whether an exception indicates the endpoint is unreachable.
+
+    Transport failures (connect/read timeouts, persistent 5xx) mean the model
+    service is down and a batch should count them toward aborting. Per-request
+    4xx rejections (including 429 rate limiting) are not endpoint outages.
+    """
+
+    return _error_family(error) in {"transport"} or _error_family(
+        error
+    ).startswith("http:5")
 
 
 def _confident_no_vocals(parsed: dict[str, Any]) -> bool:
