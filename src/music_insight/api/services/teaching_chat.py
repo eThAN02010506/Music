@@ -10,6 +10,7 @@ from music_insight.teaching.models import (
     RelistenPolicy,
     TeachingChatContext,
     TeachingChatResponse,
+    normalize_question,
 )
 from music_insight.teaching.protocols import TeachingModelAdapter
 
@@ -94,16 +95,16 @@ def _remove_repeated_suggestions(
     """Do not recommend a question that the listener has already asked."""
 
     excluded = {
-        _normalized_question(context.question),
+        normalize_question(context.question),
         *(
-            _normalized_question(turn.question)
+            normalize_question(turn.question)
             for turn in context.conversation_history[-8:]
         ),
     }
     seen: set[str] = set()
     suggestions: list[str] = []
     for suggestion in response.suggested_questions:
-        normalized = _normalized_question(suggestion)
+        normalized = normalize_question(suggestion)
         if not normalized or normalized in excluded or normalized in seen:
             continue
         seen.add(normalized)
@@ -111,7 +112,3 @@ def _remove_repeated_suggestions(
     if suggestions == response.suggested_questions:
         return response
     return response.model_copy(update={"suggested_questions": suggestions})
-
-
-def _normalized_question(value: str) -> str:
-    return "".join(character for character in value.casefold() if character.isalnum())

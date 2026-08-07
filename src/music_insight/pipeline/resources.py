@@ -143,9 +143,6 @@ class LoopLocalGate:
                 grants = self._collect_grants_locked()
         self._schedule_grants(grants)
 
-    def _withdraw(self, waiter: _GateWaiter) -> None:
-        self._abandon(waiter)
-
     async def __aenter__(self) -> None:
         waiter, future = self._new_waiter()
         grants: list[_GateWaiter] = []
@@ -165,7 +162,7 @@ class LoopLocalGate:
         try:
             await future
         except BaseException:
-            self._withdraw(waiter)
+            self._abandon(waiter)
             raise
 
         with self._guard:

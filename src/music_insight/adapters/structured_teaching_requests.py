@@ -14,6 +14,7 @@ from music_insight.teaching.models import (
     MapGenerationContext,
     TeachingChatContext,
     TeachingTimeSpan,
+    chat_focus_spans,
 )
 
 
@@ -121,7 +122,7 @@ def teaching_chat_request(
             fact.span.start_s if fact.span is not None else float("inf"),
         ),
     )
-    focus_spans = _chat_focus_spans(context)
+    focus_spans = chat_focus_spans(context)
     scoped_sources = [
         source
         for source in (_fact_payload(fact) for fact in facts)
@@ -333,17 +334,6 @@ def _bounded_listener_profile(context: TeachingChatContext) -> dict[str, Any]:
         },
         "learned_concepts": profile.learned_concepts[:12],
     }
-
-
-def _chat_focus_spans(context: TeachingChatContext) -> list[TeachingTimeSpan]:
-    if context.compare_ranges:
-        return context.compare_ranges
-    if context.selected_range is not None:
-        return [context.selected_range]
-    start_s = max(0.0, context.current_time_s - 7.5)
-    end_s = min(context.duration_s, start_s + 15.0)
-    start_s = max(0.0, end_s - 15.0)
-    return [TeachingTimeSpan(start_s=start_s, end_s=end_s)]
 
 
 def _payload_within(

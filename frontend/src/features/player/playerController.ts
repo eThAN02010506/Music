@@ -107,7 +107,3 @@ export function sanitizePlayerAction(
   if (!range) return null;
   return { ...action, ...range };
 }
-
-export function spanOverlaps(first: Span, second: Span): boolean {
-  return first.start_s < second.end_s && second.start_s < first.end_s;
-}

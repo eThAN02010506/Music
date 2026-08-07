@@ -28,6 +28,8 @@ from music_insight.teaching.models import (
     TeachingTimeSpan,
     UnderstandingEvent,
     ListeningTask,
+    normalize_question,
+    script_counts,
 )
 
 
@@ -796,21 +798,17 @@ def _suggested_questions(
         ],
     }
     excluded = {
-        _normalize_question(context.question),
+        normalize_question(context.question),
         *(
-            _normalize_question(turn.question)
+            normalize_question(turn.question)
             for turn in context.conversation_history[-8:]
         ),
     }
     return [
         question
         for question in by_intent[intent]
-        if _normalize_question(question) not in excluded
+        if normalize_question(question) not in excluded
     ][:2]
-
-
-def _normalize_question(value: str) -> str:
-    return re.sub(r"[\W_]+", "", value.casefold(), flags=re.UNICODE)
 
 
 def _cluster_facts(facts: list[SourceFact]) -> list[list[SourceFact]]:
@@ -1244,8 +1242,7 @@ def _localized_core_expression(
 
 
 def _matches_output_language(text: str, output_language: str) -> bool:
-    cjk = len(re.findall(r"[\u3400-\u9fff]", text))
-    latin = len(re.findall(r"[A-Za-z]", text))
+    cjk, latin = script_counts(text)
     if output_language == "en":
         return cjk == 0 and latin >= 3
     return cjk >= 2 and not (latin >= 12 and latin > cjk * 2)

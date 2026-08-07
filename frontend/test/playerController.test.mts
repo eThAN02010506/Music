@@ -8,7 +8,6 @@ import {
   normalizeRange,
   rangeAround,
   sanitizePlayerAction,
-  spanOverlaps,
 } from "../src/features/player/playerController.ts";
 
 test("clampTime rejects non-finite and out-of-duration positions", () => {
@@ -95,16 +94,5 @@ test("A/B comparison segments are capped at thirty seconds", () => {
       a: { start_s: 10, end_s: 40 },
       b: { start_s: 70, end_s: 100 },
     },
-  );
-});
-
-test("overlap checks use half-open time ranges", () => {
-  assert.equal(
-    spanOverlaps({ start_s: 0, end_s: 5 }, { start_s: 5, end_s: 8 }),
-    false,
-  );
-  assert.equal(
-    spanOverlaps({ start_s: 0, end_s: 5 }, { start_s: 4.9, end_s: 8 }),
-    true,
   );
 });

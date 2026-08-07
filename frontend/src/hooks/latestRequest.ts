@@ -10,10 +10,6 @@ export class LatestRequest {
     this.revision += 1;
   }
 
-  capture(): number {
-    return this.revision;
-  }
-
   isCurrent(revision: number): boolean {
     return revision === this.revision;
   }

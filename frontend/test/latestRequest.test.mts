@@ -10,7 +10,6 @@ test("only the newest asynchronous request remains current", () => {
 
   assert.equal(requests.isCurrent(first), false);
   assert.equal(requests.isCurrent(second), true);
-  assert.equal(requests.capture(), second);
 
   requests.invalidate();
   assert.equal(requests.isCurrent(second), false);

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from enum import StrEnum
 from itertools import pairwise
@@ -464,3 +465,46 @@ class MapGenerationContext(TeachingModel):
     language: str | None = Field(default=None, max_length=32)
     output_language: Literal["zh", "en"] = "zh"
     listener_profile: ListenerProfile
+
+
+_CJK_RE = re.compile(r"[㐀-鿿]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
+
+def chat_focus_spans(context: TeachingChatContext) -> list[TeachingTimeSpan]:
+    """Return the time range(s) a chat turn is anchored to.
+
+    A/B comparison uses both ranges; a manual selection uses just that
+    selection; otherwise a 15-second window around the current position. This
+    is shared by request assembly and response parsing so both layers agree on
+    what "nearby" means.
+    """
+
+    if context.compare_ranges:
+        return context.compare_ranges
+    if context.selected_range is not None:
+        return [context.selected_range]
+    start_s = max(0.0, context.current_time_s - 7.5)
+    end_s = min(context.duration_s, start_s + 15.0)
+    start_s = max(0.0, end_s - 15.0)
+    return [TeachingTimeSpan(start_s=start_s, end_s=end_s)]
+
+
+def normalize_question(value: str) -> str:
+    """Normalize a question for deduplication (compare asked vs suggested).
+
+    Shared by the fallback teacher and the chat suggestion filter so both
+    layers use the same definition of "the same question".
+    """
+
+    return "".join(character for character in value.casefold() if character.isalnum())
+
+
+def script_counts(text: str) -> tuple[int, int]:
+    """Return (cjk, latin) character counts for language heuristics."""
+
+    return (
+        len(_CJK_RE.findall(text)),
+        len(_LATIN_RE.findall(text)),
+    )
+

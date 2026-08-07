@@ -269,18 +269,6 @@ export const api = {
       },
       { signal },
     ),
-  teachingConversation: (
-    id: string,
-    conversationId: string,
-    signal?: AbortSignal,
-  ) =>
-    request<TeachingConversation>(
-      `/history/${encodeURIComponent(id)}/conversations/${
-        encodeURIComponent(conversationId)
-      }`,
-      undefined,
-      { signal },
-    ),
   deleteTeachingConversation: (id: string, conversationId: string) =>
     request<void>(
       `/history/${encodeURIComponent(id)}/conversations/${

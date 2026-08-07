@@ -22,6 +22,7 @@ from music_insight.teaching.models import (
     TeachingChatResponse,
     TeachingTimeSpan,
     UnderstandingEvent,
+    script_counts,
 )
 
 
@@ -499,8 +500,7 @@ def _validate_generated_language(
         text = str(value).strip()
         if not text:
             continue
-        cjk = len(re.findall(r"[\u3400-\u9fff]", text))
-        latin = len(re.findall(r"[A-Za-z]", text))
+        cjk, latin = script_counts(text)
         if output_language == "en":
             mismatch = cjk > 0
         else:

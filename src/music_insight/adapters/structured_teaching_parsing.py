@@ -28,6 +28,7 @@ from music_insight.teaching.models import (
     TeachingChatResponse,
     TeachingTimeSpan,
     UnderstandingEvent,
+    chat_focus_spans,
 )
 
 
@@ -120,7 +121,7 @@ def parse_teaching_chat_response(
 
     catalog = chat_source_catalog(context)
     requested_ids = _unique_strings(payload.get("source_ids"))[:6]
-    focus_spans = _context_focus_spans(context)
+    focus_spans = chat_focus_spans(context)
     invalid_ids = [
         source_id
         for source_id in requested_ids
@@ -222,7 +223,7 @@ def parse_teaching_chat_response(
 
 
 def _context_time_range(context: TeachingChatContext) -> AnswerTimeRange:
-    span = _context_focus_spans(context)[0]
+    span = chat_focus_spans(context)[0]
     return AnswerTimeRange(
         id="range.context",
         start_s=span.start_s,
@@ -238,17 +239,6 @@ def _context_time_range(context: TeachingChatContext) -> AnswerTimeRange:
             "为本次回答提供播放参照",
         ),
     )
-
-
-def _context_focus_spans(context: TeachingChatContext) -> list[TeachingTimeSpan]:
-    if context.compare_ranges:
-        return context.compare_ranges
-    if context.selected_range is not None:
-        return [context.selected_range]
-    start_s = max(0.0, context.current_time_s - 7.5)
-    end_s = min(context.duration_s, start_s + 15.0)
-    start_s = max(0.0, end_s - 15.0)
-    return [TeachingTimeSpan(start_s=start_s, end_s=end_s)]
 
 
 def _localized_text(language: str, english: str, chinese: str) -> str:
