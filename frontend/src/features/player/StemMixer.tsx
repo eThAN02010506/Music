@@ -65,6 +65,9 @@ export function StemMixer({
     } catch (cause) {
       if (!activeRef.current || isAbortError(cause)) return;
       setError(cause instanceof Error ? cause.message : "无法读取分轨状态");
+      // A transient poll failure must not strand a running stem generation in
+      // the "processing" view forever; keep polling with the regular cadence.
+      schedulePoll();
     }
   }, [historyId, schedulePoll]);
 

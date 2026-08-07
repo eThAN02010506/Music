@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, API_BASE, isAbortError } from "../../api";
 import { seconds } from "../../format";
@@ -15,6 +15,20 @@ import { loadWaveformOnce } from "./waveformRequest";
 import { StemMixer } from "./StemMixer";
 
 const EMPTY_SECTIONS: SectionMarker[] = [];
+
+function waveformSectionsFrom(
+  sections: SectionMarker[],
+): { key: string; sections: { id: string; label: string; start_s: number; end_s: number }[] } {
+  const mapped = sections.map((section) => ({
+    id: section.id,
+    label: section.label,
+    ...section.span,
+  }));
+  const key = mapped
+    .map((section) => `${section.id}:${section.start_s}-${section.end_s}`)
+    .join("|");
+  return { key, sections: mapped };
+}
 
 export function InsightPlayer({
   audioUrl,
@@ -36,14 +50,12 @@ export function InsightPlayer({
   const [waveformError, setWaveformError] = useState("");
   const player = usePlayer();
   const snapshot = usePlayerSnapshot();
-  const waveformSections = useMemo(
-    () => sections.map((section) => ({
-      id: section.id,
-      label: section.label,
-      ...section.span,
-    })),
-    [sections],
-  );
+  const waveformCache = useRef(waveformSectionsFrom(sections));
+  const nextWaveform = waveformSectionsFrom(sections);
+  if (waveformCache.current.key !== nextWaveform.key) {
+    waveformCache.current = nextWaveform;
+  }
+  const waveformSections = waveformCache.current.sections;
   const setAudioElement = useCallback((node: HTMLAudioElement | null) => {
     audioRef.current = node;
     setMedia((current) => current === node ? current : node);

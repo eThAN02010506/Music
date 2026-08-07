@@ -619,8 +619,9 @@ export MUSIC_INSIGHT_LOCAL_LLAMA_SERVER=llama-server
 export MUSIC_INSIGHT_WEB_ORIGINS=http://192.168.1.16:5174
 ```
 
-完整默认值与注释以 [`.env.example`](.env.example) 为准。当前 Settings 不会
-自动加载 `.env` 文件；应由 shell、进程管理器、容器或部署平台注入这些变量。
+完整默认值与注释以 [`.env.example`](.env.example) 为准。Settings 会读取项目根目录的
+`.env` 文件（如果存在）；shell 环境变量优先于 `.env`。也可由进程管理器、容器或
+部署平台注入这些变量。
 
 默认 `memory` 模式仍适合本地开发。设置 `MUSIC_INSIGHT_JOB_BACKEND=redis`
 后，后台 `/jobs` 使用 Redis + Celery：任务状态、SSE 数据、取消、结果以及

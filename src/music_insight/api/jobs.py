@@ -531,15 +531,6 @@ class AnalysisJobStore:
         for job_id in terminal_ids[: max(0, excess)]:
             del self._jobs[job_id]
 
-    def raw_revision(
-        self,
-        job_id: str,
-        *,
-        owner_user_id: str,
-    ) -> int | None:
-        job = self._owned_job(job_id, owner_user_id)
-        return job.revision if job else None
-
     @staticmethod
     def _require_owner(owner_user_id: str) -> str:
         if not isinstance(owner_user_id, str) or not owner_user_id.strip():

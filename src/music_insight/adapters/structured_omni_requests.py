@@ -10,6 +10,8 @@ from music_insight.schemas import DspResult, Evidence, LyricsSegment
 def _evenly_sample(values: list[Any], limit: int) -> list[Any]:
     if len(values) <= limit:
         return values
+    if limit <= 1:
+        return values[:1]
     indices = {
         round(index * (len(values) - 1) / (limit - 1))
         for index in range(limit)

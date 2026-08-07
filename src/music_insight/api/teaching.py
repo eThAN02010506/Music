@@ -320,25 +320,6 @@ class TeachingStore:
             ).fetchone()
         return _map_record(published)
 
-    def complete_understanding_map(
-        self,
-        analysis_id: str,
-        *,
-        user_id: str,
-        schema_version: int,
-        source_result_hash: str,
-        map_payload: Mapping[str, object],
-        now: datetime | None = None,
-    ) -> dict[str, Any]:
-        return self.upsert_understanding_map(
-            analysis_id,
-            user_id=user_id,
-            schema_version=schema_version,
-            source_result_hash=source_result_hash,
-            map_payload=map_payload,
-            now=now,
-        )
-
     def fail_understanding_map(
         self,
         analysis_id: str,

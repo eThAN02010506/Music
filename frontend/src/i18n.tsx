@@ -594,7 +594,11 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.lang = locale;
-    window.localStorage.setItem(STORAGE_KEY, locale);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, locale);
+    } catch {
+      // Private mode or disabled storage must not break locale switching.
+    }
   }, [locale]);
 
   const setLocale = useCallback((next: UiLocale) => {

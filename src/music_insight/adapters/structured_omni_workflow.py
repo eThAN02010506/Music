@@ -574,6 +574,10 @@ class StructuredOmniAnalysisWorkflow:
                 # A half-dead endpoint surfaces here as a transport error; let
                 # the _process_chunk state machine count it and abort the batch
                 # after repeats instead of silently degrading every chunk.
+                # Still write back the cleaned lyrics so a degraded-but-not-
+                # aborted chunk never feeds raw, low-quality lyrics into the
+                # aggregation.
+                parsed["lyrics"] = cleaned_lyrics
                 raise
             parsed["lyrics"] = cleaned_lyrics
             state.evidence.append(

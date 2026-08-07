@@ -145,11 +145,6 @@ class AnalysisResult(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-class AnalysisJob(BaseModel):
-    id: str
-    asset: AudioAsset
-
-
 class UnifiedAudioResult(BaseModel):
     asr: AsrResult
     scene: AudioSceneResult

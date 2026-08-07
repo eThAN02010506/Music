@@ -225,7 +225,9 @@ export function workspaceReducer(
       if (activeHistoryId(state) !== action.jobId) return state;
       return {
         ...state,
-        view: withRevisionCount(state.view, 0),
+        // Do not reset revisionCount: history-loaded already populated it
+        // from entry.revision_count, and a job result must not clear the
+        // revision list the user can already see.
         result: action.result,
       };
     case "navigation-started":

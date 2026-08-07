@@ -7,7 +7,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="MUSIC_INSIGHT_")
+    model_config = SettingsConfigDict(
+        env_prefix="MUSIC_INSIGHT_",
+        # Load a local .env if present (README documents shell exports, but
+        # the repo ships .env.example; both should work). An explicit shell
+        # env var always wins over the file value.
+        env_file=".env",
+        extra="ignore",
+    )
 
     workspace_dir: Path = Field(default=Path(".music_insight"))
     max_upload_mb: int = Field(default=128, ge=1, le=1024)
