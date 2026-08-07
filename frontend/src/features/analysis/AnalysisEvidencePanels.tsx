@@ -1,15 +1,9 @@
-import { confidenceClass, percent, seconds } from "../../format";
+import { seconds } from "../../format";
 import { useI18n } from "../../i18n";
 import type { AnalysisResult, Evidence } from "../../types";
+import { Confidence } from "../../components/Confidence";
 import { usePlayer } from "../player/PlayerContext";
 
-function Confidence({ value }: { value: number | null }) {
-  return (
-    <span className={`confidence ${confidenceClass(value)}`}>
-      {percent(value)}
-    </span>
-  );
-}
 function TagList({
   items,
   empty,

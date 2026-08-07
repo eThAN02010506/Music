@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
 import { api } from "../../api";
-import { confidenceClass, percent, seconds } from "../../format";
+import { seconds } from "../../format";
+import { Confidence } from "../../components/Confidence";
 import { LatestRequest } from "../../hooks/latestRequest";
 import { useI18n } from "../../i18n";
 import type {
@@ -16,13 +17,6 @@ import {
   usePlayerSnapshot,
 } from "../player/PlayerContext";
 
-function Confidence({ value }: { value: number | null }) {
-  return (
-    <span className={`confidence ${confidenceClass(value)}`}>
-      {percent(value)}
-    </span>
-  );
-}
 function lineIsCurrent(line: LyricsSegment, currentTime: number): boolean {
   return Boolean(
     line.span

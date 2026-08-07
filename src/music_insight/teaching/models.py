@@ -508,3 +508,13 @@ def script_counts(text: str) -> tuple[int, int]:
         len(_LATIN_RE.findall(text)),
     )
 
+
+def localized_text(language: str, english: str, chinese: str) -> str:
+    """Pick the prose variant matching the requested output language.
+
+    Shared by the fallback teacher, the teaching record mappers, and the wire
+    parsing layer so the zh/en contract lives in one place.
+    """
+
+    return english if language == "en" else chinese
+

@@ -28,6 +28,7 @@ from music_insight.teaching.models import (
     TeachingTimeSpan,
     UnderstandingEvent,
     ListeningTask,
+    localized_text,
     normalize_question,
     script_counts,
 )
@@ -1249,7 +1250,7 @@ def _matches_output_language(text: str, output_language: str) -> bool:
 
 
 def _message(output_language: str, english: str, chinese: str) -> str:
-    return english if output_language == "en" else chinese
+    return localized_text(output_language, english, chinese)
 
 
 def _map_confidence(events: list[UnderstandingEvent]) -> float:

@@ -29,6 +29,7 @@ from music_insight.teaching.models import (
     TeachingTimeSpan,
     UnderstandingEvent,
     chat_focus_spans,
+    localized_text,
 )
 
 
@@ -242,7 +243,7 @@ def _context_time_range(context: TeachingChatContext) -> AnswerTimeRange:
 
 
 def _localized_text(language: str, english: str, chinese: str) -> str:
-    return english if language == "en" else chinese
+    return localized_text(language, english, chinese)
 
 
 def parse_relisten_result(

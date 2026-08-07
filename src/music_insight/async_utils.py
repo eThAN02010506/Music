@@ -9,6 +9,22 @@ P = ParamSpec("P")
 T = TypeVar("T")
 
 
+async def settle_despite_cancellation(task: asyncio.Task):
+    """Wait for a child operation while preserving the caller's cancellation.
+
+    ``asyncio.to_thread`` and AnyIO's thread pool cannot stop a function that
+    has already begun. Compensation must therefore wait for that function to
+    finish before deleting the row or file it may still create.
+    """
+
+    while True:
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.done():
+                return task.result()
+
+
 async def run_sync_settled(
     function: Callable[P, T],
     *args: P.args,

@@ -19,6 +19,7 @@ from music_insight.teaching.models import (
     ConversationTurn,
     MusicUnderstandingMap,
     TeachingTimeSpan,
+    localized_text,
 )
 
 
@@ -187,7 +188,7 @@ def bounded_error(error: BaseException, limit: int) -> str:
 
 
 def localized(language: str, english: str, chinese: str) -> str:
-    return english if language == "en" else chinese
+    return localized_text(language, english, chinese)
 
 
 def datetime_or_none(value: Any) -> datetime | None:

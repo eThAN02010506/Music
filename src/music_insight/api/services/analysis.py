@@ -9,6 +9,7 @@ from uuid import uuid4
 from fastapi import HTTPException, UploadFile
 from starlette.concurrency import run_in_threadpool
 
+from music_insight.async_utils import settle_despite_cancellation
 from music_insight.api.history import HistoryStore
 from music_insight.api.job_access import (
     cancel_job,
@@ -29,24 +30,6 @@ from music_insight.schemas import AnalysisResult, AudioAsset
 from music_insight.storage.assets import content_cache_key
 
 from .uploads import save_audio_upload
-
-
-async def _settle_despite_cancellation(
-    task: asyncio.Task,
-):
-    """Wait for a child operation while preserving the caller's cancellation.
-
-    ``asyncio.to_thread`` and AnyIO's thread pool cannot stop a function that
-    has already begun. Compensation must therefore wait for that function to
-    finish before deleting the row or file it may still create.
-    """
-
-    while True:
-        try:
-            return await asyncio.shield(task)
-        except asyncio.CancelledError:
-            if task.done():
-                return task.result()
 
 
 async def submit_analysis_job(
@@ -238,7 +221,7 @@ async def _submit_memory_analysis_job(
         # history row after cleanup.
         if creation_task is not None:
             try:
-                await _settle_despite_cancellation(creation_task)
+                await settle_despite_cancellation(creation_task)
             except BaseException:
                 pass
         cleanup_task = asyncio.create_task(
@@ -250,7 +233,7 @@ async def _submit_memory_analysis_job(
                 user_id=user_id,
             )
         )
-        await _settle_despite_cancellation(cleanup_task)
+        await settle_despite_cancellation(cleanup_task)
         _raise_memory_submission_error(exc)
 
     ready.set()
@@ -453,7 +436,7 @@ async def _settle_distributed_submission_tasks(
         if task is None:
             continue
         try:
-            await _settle_despite_cancellation(task)
+            await settle_despite_cancellation(task)
             if task is history_task:
                 history_created = True
         except BaseException:

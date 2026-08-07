@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import HTTPException
 from starlette.concurrency import run_in_threadpool
 
+from music_insight.async_utils import settle_despite_cancellation
 from music_insight.api.contracts.teaching import (
     ListenerProfileUpdate,
     TeachingChatRequest,
@@ -72,17 +73,6 @@ from music_insight.schemas import AnalysisResult
 
 
 TEACHING_PENDING_LEASE = timedelta(minutes=30)
-
-
-async def _settle_despite_cancellation(task: asyncio.Task):
-    """Wait for an already-running thread operation after caller cancellation."""
-
-    while True:
-        try:
-            return await asyncio.shield(task)
-        except asyncio.CancelledError:
-            if task.done():
-                return task.result()
 
 
 async def get_teaching_guide(
@@ -284,7 +274,7 @@ async def _compensate_cancelled_guide_reservation(
 ) -> None:
     try:
         cancelled_record, cancelled_owner = (
-            await _settle_despite_cancellation(reservation_task)
+            await settle_despite_cancellation(reservation_task)
         )
     except Exception:
         return
@@ -699,7 +689,7 @@ async def _compensate_cancelled_message_reservation(
 ) -> None:
     try:
         cancelled_record, cancelled_owner = (
-            await _settle_despite_cancellation(reservation_task)
+            await settle_despite_cancellation(reservation_task)
         )
     except Exception:
         return
